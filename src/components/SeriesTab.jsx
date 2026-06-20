@@ -289,6 +289,14 @@ export default function SeriesTab({ connection }) {
     }
   };
 
+  const handlePrevEpisode = () => {
+    if (!activeEpisode || !episodes) return;
+    const currentIndex = episodes.findIndex(ep => ep.id === activeEpisode.id);
+    if (currentIndex > 0) {
+      handlePlayEpisode(episodes[currentIndex - 1]);
+    }
+  };
+
   // Filter categories by sidebar search query
   const filteredCategories = categories.filter(cat => 
     cat.title?.toLowerCase().includes(catSearchQuery.toLowerCase()) || cat.id === 'all' || cat.id === 'favorites'
@@ -586,6 +594,11 @@ export default function SeriesTab({ connection }) {
                 onNextEpisode={
                   episodes.findIndex(e => e.id === activeEpisode.id) < episodes.length - 1 
                   ? handleNextEpisode 
+                  : null
+                }
+                onPrevEpisode={
+                  episodes.findIndex(e => e.id === activeEpisode.id) > 0
+                  ? handlePrevEpisode
                   : null
                 }
               />

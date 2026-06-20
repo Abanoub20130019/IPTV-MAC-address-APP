@@ -10,7 +10,8 @@ export default function VideoPlayer({
   token, 
   portalUrl,
   isLive = true,
-  onNextEpisode
+  onNextEpisode,
+  onPrevEpisode
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -56,6 +57,11 @@ export default function VideoPlayer({
   };
 
   const structuredUrl = getStructuredUrl();
+
+  const nextEpRef = useRef(onNextEpisode);
+  useEffect(() => {
+    nextEpRef.current = onNextEpisode;
+  }, [onNextEpisode]);
 
   // Load and play the stream
   useEffect(() => {
@@ -122,9 +128,16 @@ export default function VideoPlayer({
       }
     };
 
+    const handleEnded = () => {
+      if (!isLive && nextEpRef.current) {
+        nextEpRef.current();
+      }
+    };
+
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('durationchange', handleDurationChange);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('ended', handleEnded);
 
     // Determine the source URL
     const isHttps = window.location.protocol === 'https:';
@@ -259,6 +272,7 @@ export default function VideoPlayer({
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('durationchange', handleDurationChange);
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('ended', handleEnded);
       cleanupPlayers();
     };
   }, [streamUrl]);
@@ -542,8 +556,15 @@ export default function VideoPlayer({
                     </svg>
                     <span style={{ fontSize: '0.65rem', color: '#ccc', marginLeft: '-2px' }}>10s</span>
                   </button>
+                  {onPrevEpisode && (
+                    <button onClick={onPrevEpisode} style={{...controlButtonStyle, marginLeft: '5px'}} title="Previous Episode">
+                      <svg style={{ width: '24px', height: '24px' }} viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18 6l-8.5 6 8.5 6V6zM8 6v12h-2V6h2z"/>
+                      </svg>
+                    </button>
+                  )}
                   {onNextEpisode && (
-                    <button onClick={onNextEpisode} style={{...controlButtonStyle, marginLeft: '10px'}} title="Next Episode">
+                    <button onClick={onNextEpisode} style={{...controlButtonStyle, marginLeft: '5px'}} title="Next Episode">
                       <svg style={{ width: '24px', height: '24px' }} viewBox="0 0 24 24" fill="currentColor">
                         <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
                       </svg>
@@ -612,6 +633,21 @@ export default function VideoPlayer({
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Netflix-like Next Episode Overlay */}
+      {!isLive && onNextEpisode && duration > 0 && currentTime > duration - 15 && (
+        <div style={nextEpisodeOverlayStyle}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 'bold', fontSize: '1rem' }}>Up Next</span>
+            <button className="btn-primary" onClick={onNextEpisode} style={{ padding: '10px 20px', fontSize: '0.9rem' }}>
+              ▶ Play Next Episode
+            </button>
+          </div>
+          <div style={{ height: '4px', background: 'rgba(255,255,255,0.2)', width: '100%', marginTop: '10px', borderRadius: '2px', overflow: 'hidden' }}>
+             <div style={{ height: '100%', background: 'var(--accent-primary)', width: `${((currentTime - (duration - 15)) / 15) * 100}%`, transition: 'width 1s linear' }} />
           </div>
         </div>
       )}
@@ -806,6 +842,21 @@ const tdValueStyle = {
   textAlign: 'right',
   fontSize: '0.7rem',
   fontFamily: 'monospace'
+};
+
+const nextEpisodeOverlayStyle = {
+  position: 'absolute',
+  bottom: '90px',
+  right: '30px',
+  background: 'rgba(10, 11, 16, 0.9)',
+  border: '1px solid var(--border-glass)',
+  borderRadius: '8px',
+  padding: '16px',
+  zIndex: 10,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: '200px',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
 };
 
 const copyLinkButtonStyle = {
