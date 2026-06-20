@@ -832,19 +832,6 @@ export default function ConnectionScreen({ onConnectSuccess }) {
                     Quick Connect
                   </button>
                 </div>
-
-                <div style={dividerContainerStyle}>
-                  <span style={dividerTextStyle}>TEST SIMULATION</span>
-                </div>
-
-                <button 
-                  type="button" 
-                  className="btn-secondary" 
-                  onClick={loadMockMode}
-                  style={{ padding: '12px', borderColor: 'rgba(0, 240, 255, 0.25)' }}
-                >
-                  ⚡ Start Offline IPTV Simulator (Mock Mode)
-                </button>
               </form>
             </div>
           )}

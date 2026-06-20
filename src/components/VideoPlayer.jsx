@@ -9,7 +9,8 @@ export default function VideoPlayer({
   streamId, 
   token, 
   portalUrl,
-  isLive = true 
+  isLive = true,
+  onNextEpisode
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -202,7 +203,9 @@ export default function VideoPlayer({
           const mpegPlayer = mpegts.createPlayer({
             type: 'mpegts',
             url: playSource,
-            isLive: isLive
+            isLive: isLive,
+            hasAudio: true,
+            hasVideo: true
           }, {
             enableWorker: true,
             enableStashBuffer: true,
@@ -539,6 +542,13 @@ export default function VideoPlayer({
                     </svg>
                     <span style={{ fontSize: '0.65rem', color: '#ccc', marginLeft: '-2px' }}>10s</span>
                   </button>
+                  {onNextEpisode && (
+                    <button onClick={onNextEpisode} style={{...controlButtonStyle, marginLeft: '10px'}} title="Next Episode">
+                      <svg style={{ width: '24px', height: '24px' }} viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+                      </svg>
+                    </button>
+                  )}
                 </div>
               )}
 
