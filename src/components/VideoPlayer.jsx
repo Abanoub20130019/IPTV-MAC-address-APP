@@ -664,9 +664,9 @@ export default function VideoPlayer({
           )}
 
           {/* Controls Bar */}
-          <div style={controlsBarStyle}>
+          <div className="vp-controls-bar" style={controlsBarStyle}>
             {/* Left Controls */}
-            <div style={controlSectionStyle}>
+            <div className="vp-left-controls" style={controlSectionStyle}>
               <button onClick={togglePlay} style={controlButtonStyle} title={isPlaying ? 'Pause' : 'Play'}>
                 {isPlaying ? (
                   <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
@@ -732,15 +732,16 @@ export default function VideoPlayer({
                   value={volume}
                   onChange={handleVolumeChange}
                   style={volumeSliderStyle}
+                  className="vp-volume-slider"
                 />
               </div>
 
               {/* Stream Title */}
-              <span style={titleStyle}>{title || 'IPTV Stream'}</span>
+              <span className="vp-stream-title" style={titleStyle}>{title || 'IPTV Stream'}</span>
             </div>
 
             {/* Right Controls */}
-            <div style={controlSectionStyle}>
+            <div className="vp-right-controls" style={controlSectionStyle}>
               {/* Copy Stream / VLC Button */}
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                 {copyStatus && (
