@@ -57,12 +57,19 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_iptv_key';
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SECRET_KEY; // Using service role key for backend access
 
+import WebSocket from 'ws';
+
 if (!supabaseUrl || !supabaseKey) {
   console.error('Missing Supabase Environment Variables! Please set SUPABASE_URL and SUPABASE_SECRET_KEY.');
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false },
+  global: {
+    WebSocket,
+  },
+});
 console.log('Connected to Supabase Database');
 
 // Auto-create default admin if no users exist
