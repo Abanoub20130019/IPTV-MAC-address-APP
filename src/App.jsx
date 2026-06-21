@@ -65,14 +65,14 @@ export default function App() {
         ) : (
     <div className="app-grid">
       {/* 1. Left Navigation Bar */}
-      <nav className="glass-panel" style={navStyle}>
-        <div style={logoWrapperStyle}>
+      <nav className="glass-panel nav-style" style={navStyle}>
+        <div className="logo-wrapper" style={logoWrapperStyle}>
           <svg style={{ width: '28px', height: '28px', color: 'var(--accent-primary)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
         </div>
 
-        <div style={navListStyle}>
+        <div className="nav-list-style" style={navListStyle}>
           <button
             className={`nav-item ${activeTab === 'live' ? 'active' : ''}`}
             onClick={() => setActiveTab('live')}
