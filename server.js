@@ -683,7 +683,7 @@ app.get('/api/vod/movies', async (req, res) => {
   }
 
   try {
-    const catParam = category && category !== '0' ? `&category=${category}` : '';
+    const catParam = (category && category !== '0' && category !== 'all') ? `&category=${category}` : '&category=*';
     const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
     const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&fav=0&p=${page}&JsHttpRequest=1-xml`;
     const response = await axios.get(url, {
