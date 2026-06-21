@@ -67,6 +67,9 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false },
+  realtime: {
+    transport: WebSocket,
+  },
   global: {
     WebSocket,
   },
