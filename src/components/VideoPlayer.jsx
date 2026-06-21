@@ -11,7 +11,14 @@ export default function VideoPlayer({
   portalUrl,
   isLive = true,
   onNextEpisode,
-  onPrevEpisode
+  onPrevEpisode,
+  episodesList = [],
+  activeEpisodeId = null,
+  onEpisodeSelect,
+  seriesInfo = null,
+  channelsList = [],
+  activeChannelId = null,
+  onChannelSelect
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -23,6 +30,25 @@ export default function VideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showStreamInfo, setShowStreamInfo] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(() => {
+    const saved = localStorage.getItem('helix_iptv_autoplay');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  // HLS Tracks
+  const [audioTracks, setAudioTracks] = useState([]);
+  const [subtitleTracks, setSubtitleTracks] = useState([]);
+  const [activeAudio, setActiveAudio] = useState(-1);
+  const [activeSubtitle, setActiveSubtitle] = useState(-1);
+  
+  // Phase 2 states
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [hlsLevels, setHlsLevels] = useState([]);
+  const [currentLevel, setCurrentLevel] = useState(-1);
+  
+  // Drawer States
+  const [showEpisodesDrawer, setShowEpisodesDrawer] = useState(false);
   
   // Timeline tracking states
   const [currentTime, setCurrentTime] = useState(0);
@@ -86,7 +112,11 @@ export default function VideoPlayer({
           const savedProgress = localStorage.getItem('helix_iptv_progress') || '{}';
           try {
             const progressObj = JSON.parse(savedProgress);
-            progressObj[streamId] = video.currentTime;
+            progressObj[streamId] = {
+              time: video.currentTime,
+              updatedAt: Date.now(),
+              ...(seriesInfo || {})
+            };
             localStorage.setItem('helix_iptv_progress', JSON.stringify(progressObj));
           } catch (e) {}
         } else if (ratio >= 0.95 || video.currentTime <= 5) {
@@ -113,7 +143,9 @@ export default function VideoPlayer({
         if (savedProgress) {
           try {
             const progressObj = JSON.parse(savedProgress);
-            const savedTime = progressObj[streamId];
+            const savedData = progressObj[streamId];
+            const savedTime = typeof savedData === 'object' ? savedData.time : savedData;
+            
             if (savedTime && savedTime > 5 && savedTime < video.duration - 5) {
               console.log(`Auto-resuming progress for stream ${streamId} at ${savedTime}s`);
               video.currentTime = savedTime;
@@ -129,7 +161,7 @@ export default function VideoPlayer({
     };
 
     const handleEnded = () => {
-      if (!isLive && nextEpRef.current) {
+      if (!isLive && nextEpRef.current && autoPlay) {
         nextEpRef.current();
       }
     };
@@ -162,10 +194,20 @@ export default function VideoPlayer({
         hls.loadSource(playSource);
         hls.attachMedia(video);
         
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
           setLoading(false);
+          setAudioTracks(hls.audioTracks || []);
+          setSubtitleTracks(hls.subtitleTracks || []);
+          setHlsLevels(data.levels || []);
+          setActiveAudio(hls.audioTrack);
+          setActiveSubtitle(hls.subtitleTrack);
+          setCurrentLevel(hls.currentLevel);
           video.play().catch(handlePlayError);
         });
+
+        hls.on(Hls.Events.LEVEL_SWITCHED, (e, data) => setCurrentLevel(data.level));
+        hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (e, data) => setActiveAudio(data.id));
+        hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, (e, data) => setActiveSubtitle(data.id));
 
         hls.on(Hls.Events.ERROR, (event, data) => {
           console.error('HLS error:', data);
@@ -378,6 +420,71 @@ export default function VideoPlayer({
     }
   };
 
+  const togglePiP = async () => {
+    try {
+      if (videoRef.current !== document.pictureInPictureElement) {
+        await videoRef.current?.requestPictureInPicture();
+      } else {
+        await document.exitPictureInPicture();
+      }
+    } catch (err) {
+      console.error('PiP failed', err);
+    }
+  };
+
+  const toggleAutoPlay = () => {
+    const next = !autoPlay;
+    setAutoPlay(next);
+    localStorage.setItem('helix_iptv_autoplay', String(next));
+  };
+
+  const handleAudioSelect = (id) => {
+    if (hlsRef.current) hlsRef.current.audioTrack = id;
+    setActiveAudio(id);
+  };
+
+  const handleSubtitleSelect = (id) => {
+    if (hlsRef.current) hlsRef.current.subtitleTrack = id;
+    setActiveSubtitle(id);
+  };
+
+  const handleLevelSelect = (level) => {
+    if (hlsRef.current) hlsRef.current.currentLevel = level;
+    setCurrentLevel(level);
+  };
+
+  const changePlaybackRate = (rate) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = rate;
+    }
+  };
+
+  // Phase 2: Cast & AirPlay
+  const handleAirPlay = () => {
+    if (videoRef.current && videoRef.current.webkitShowPlaybackTargetPicker) {
+      videoRef.current.webkitShowPlaybackTargetPicker();
+    } else {
+      alert("AirPlay is only supported on Safari / Apple devices.");
+    }
+  };
+
+  const handleChromecast = () => {
+    alert("Chromecast support will be integrated once the Google Cast SDK is loaded in index.html.");
+  };
+
+  const handleChannelZap = (direction) => {
+    if (!isLive || !channelsList || channelsList.length === 0 || !activeChannelId || !onChannelSelect) return;
+    const currentIndex = channelsList.findIndex(c => c.id === activeChannelId);
+    if (currentIndex === -1) return;
+    
+    let nextIndex = currentIndex + direction;
+    if (nextIndex < 0) nextIndex = channelsList.length - 1;
+    if (nextIndex >= channelsList.length) nextIndex = 0;
+    
+    onChannelSelect(channelsList[nextIndex]);
+  };
+
   const handleMouseMove = () => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -416,6 +523,12 @@ export default function VideoPlayer({
       if (key === ' ' || key === 'spacebar') {
         e.preventDefault();
         togglePlay();
+      } else if (key === 'f') {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (key === 'm') {
+        e.preventDefault();
+        toggleMute();
       } else if (key === 'arrowleft') {
         if (!isLive) {
           e.preventDefault();
@@ -426,6 +539,20 @@ export default function VideoPlayer({
           e.preventDefault();
           skipTime(10);
         }
+      } else if (key === 'arrowup') {
+        e.preventDefault();
+        if (isLive && channelsList.length > 0) {
+          handleChannelZap(-1); // Up = Previous Channel
+        } else {
+          handleVolumeChange({ target: { value: Math.min(1, volume + 0.1) } });
+        }
+      } else if (key === 'arrowdown') {
+        e.preventDefault();
+        if (isLive && channelsList.length > 0) {
+          handleChannelZap(1); // Down = Next Channel
+        } else {
+          handleVolumeChange({ target: { value: Math.max(0, volume - 0.1) } });
+        }
       }
     };
     
@@ -433,7 +560,7 @@ export default function VideoPlayer({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isPlaying, isLive]);
+  }, [isPlaying, isLive, volume, channelsList, activeChannelId]);
 
   // Construct local stream URL for copying to external players
   const getProxyStreamUrl = () => {
@@ -497,6 +624,17 @@ export default function VideoPlayer({
             Check your MAC address permissions or check if the stream link is active.
           </p>
         </div>
+      )}
+
+      {/* Skip Intro Button */}
+      {!isLive && currentTime > 5 && currentTime < 180 && (
+        <button 
+          onClick={() => skipTime(85)}
+          style={skipIntroButtonStyle}
+          className="glass-panel-interactive"
+        >
+          Skip Intro
+        </button>
       )}
 
       {/* Custom Video Controls */}
@@ -603,6 +741,75 @@ export default function VideoPlayer({
 
             {/* Right Controls */}
             <div style={controlSectionStyle}>
+              {/* Copy Stream / VLC Button */}
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                {copyStatus && (
+                  <span style={{ position: 'absolute', right: '40px', bottom: '100%', whiteSpace: 'nowrap', background: 'var(--accent-primary)', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', marginBottom: '10px' }}>
+                    {copyStatus}
+                  </span>
+                )}
+                <button 
+                  onClick={async () => {
+                    const url = getProxyStreamUrl();
+                    try {
+                      await navigator.clipboard.writeText(url);
+                      setCopyStatus('Copied! Open VLC -> Network Stream');
+                      setTimeout(() => setCopyStatus(''), 4000);
+                    } catch (e) {
+                      setCopyStatus('Failed to copy');
+                    }
+                  }} 
+                  style={controlButtonStyle} 
+                  title="Copy stream link to play in VLC (Fixes Audio issues for unsupported codecs like AC-3)"
+                >
+                  <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                  </svg>
+                </button>
+              </div>
+
+              {!isLive && episodesList && episodesList.length > 0 && (
+                <button 
+                  onClick={() => setShowEpisodesDrawer(!showEpisodesDrawer)} 
+                  style={{ ...controlButtonStyle, color: showEpisodesDrawer ? 'var(--accent-primary)' : '#fff' }}
+                  title="Episodes"
+                >
+                  <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M4 10h12v4H4v-4zm0-6h16v4H4V4zm0 12h8v4H4v-4z"/>
+                  </svg>
+                </button>
+              )}
+
+              {/* Cast & AirPlay */}
+              <button onClick={handleAirPlay} style={controlButtonStyle} title="AirPlay">
+                <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 22h12l-6-6zM21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4v-2H3V5h18v12h-4v2h4c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+                </svg>
+              </button>
+              <button onClick={handleChromecast} style={controlButtonStyle} title="Chromecast">
+                <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11zm20-7H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+                </svg>
+              </button>
+
+              {document.pictureInPictureEnabled && (
+                <button onClick={togglePiP} style={controlButtonStyle} title="Picture in Picture">
+                  <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/>
+                  </svg>
+                </button>
+              )}
+
+              <button 
+                onClick={() => setShowSettings(!showSettings)} 
+                style={{ ...controlButtonStyle, color: showSettings ? 'var(--accent-primary)' : '#fff' }}
+                title="Settings"
+              >
+                <svg style={iconStyle} viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+                </svg>
+              </button>
+
               <button 
                 onClick={() => setShowStreamInfo(!showStreamInfo)} 
                 style={{
@@ -637,17 +844,144 @@ export default function VideoPlayer({
         </div>
       )}
 
+      {/* Settings Dropdown Menu */}
+      {showSettings && (
+        <div style={settingsMenuOverlayStyle} className="glass-panel">
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <h4 style={{ margin: 0, fontSize: '0.9rem', color: '#fff' }}>Settings</h4>
+          </div>
+          
+          <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {/* Auto-Play Toggle */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Auto-Play Next Episode</span>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={autoPlay} onChange={toggleAutoPlay} />
+                <span className="slider round"></span>
+              </label>
+            </div>
+
+            {/* Playback Speed */}
+            {!isLive && (
+              <div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '5px', display: 'block' }}>Playback Speed</span>
+                <select 
+                  value={playbackRate} 
+                  onChange={(e) => changePlaybackRate(parseFloat(e.target.value))}
+                  style={settingsSelectStyle}
+                >
+                  <option value="0.5">0.5x</option>
+                  <option value="1">1.0x (Normal)</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="2">2.0x</option>
+                </select>
+              </div>
+            )}
+
+            {/* Quality Selector */}
+            {hlsLevels.length > 0 && (
+              <div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '5px', display: 'block' }}>Quality</span>
+                <select 
+                  value={currentLevel} 
+                  onChange={(e) => handleLevelSelect(parseInt(e.target.value))}
+                  style={settingsSelectStyle}
+                >
+                  <option value="-1">Auto</option>
+                  {hlsLevels.map((lvl, index) => (
+                    <option key={index} value={index}>
+                      {lvl.height ? `${lvl.height}p` : `Level ${index}`} ({Math.round(lvl.bitrate / 1000)} kbps)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Audio Tracks */}
+            {audioTracks.length > 1 && (
+              <div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '5px', display: 'block' }}>Audio Track</span>
+                <select 
+                  value={activeAudio} 
+                  onChange={(e) => handleAudioSelect(parseInt(e.target.value))}
+                  style={settingsSelectStyle}
+                >
+                  {audioTracks.map(t => (
+                    <option key={t.id} value={t.id}>{t.name || t.language || `Track ${t.id}`}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Subtitle Tracks */}
+            {subtitleTracks.length > 0 && (
+              <div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '5px', display: 'block' }}>Subtitles</span>
+                <select 
+                  value={activeSubtitle} 
+                  onChange={(e) => handleSubtitleSelect(parseInt(e.target.value))}
+                  style={settingsSelectStyle}
+                >
+                  <option value="-1">Off</option>
+                  {subtitleTracks.map(t => (
+                    <option key={t.id} value={t.id}>{t.name || t.language || `Subtitle ${t.id}`}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Netflix-like Next Episode Overlay */}
       {!isLive && onNextEpisode && duration > 0 && currentTime > duration - 15 && (
         <div style={nextEpisodeOverlayStyle}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <span style={{ color: 'var(--text-primary)', fontWeight: 'bold', fontSize: '1rem' }}>Up Next</span>
-            <button className="btn-primary" onClick={onNextEpisode} style={{ padding: '10px 20px', fontSize: '0.9rem' }}>
+            <button className="btn-primary" onClick={() => { if(nextEpRef.current) nextEpRef.current(); }} style={{ padding: '10px 20px', fontSize: '0.9rem' }}>
               ▶ Play Next Episode
             </button>
           </div>
-          <div style={{ height: '4px', background: 'rgba(255,255,255,0.2)', width: '100%', marginTop: '10px', borderRadius: '2px', overflow: 'hidden' }}>
-             <div style={{ height: '100%', background: 'var(--accent-primary)', width: `${((currentTime - (duration - 15)) / 15) * 100}%`, transition: 'width 1s linear' }} />
+          {autoPlay && (
+            <div style={{ height: '4px', background: 'rgba(255,255,255,0.2)', width: '100%', marginTop: '10px', borderRadius: '2px', overflow: 'hidden' }}>
+               <div style={{ height: '100%', background: 'var(--accent-primary)', width: `${((currentTime - (duration - 15)) / 15) * 100}%`, transition: 'width 1s linear' }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Episodes Drawer */}
+      {showEpisodesDrawer && (
+        <div style={episodesDrawerStyle} className="glass-panel">
+          <div style={{ padding: '15px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h4 style={{ margin: 0, color: '#fff' }}>Episodes</h4>
+            <button onClick={() => setShowEpisodesDrawer(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>✕</button>
+          </div>
+          <div style={{ overflowY: 'auto', flex: 1, padding: '10px' }}>
+            {episodesList.map(ep => (
+              <div 
+                key={ep.id}
+                onClick={() => {
+                  if (onEpisodeSelect) onEpisodeSelect(ep);
+                  setShowEpisodesDrawer(false);
+                }}
+                style={{
+                  padding: '10px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  marginBottom: '8px',
+                  background: activeEpisodeId === ep.id ? 'rgba(0, 240, 255, 0.1)' : 'transparent',
+                  border: `1px solid ${activeEpisodeId === ep.id ? 'var(--accent-primary)' : 'transparent'}`,
+                  transition: 'background 0.2s'
+                }}
+                className="episode-drawer-item"
+              >
+                <div style={{ fontSize: '0.85rem', color: activeEpisodeId === ep.id ? 'var(--accent-primary)' : '#fff', fontWeight: 'bold' }}>
+                  {ep.episodeNumber}. {ep.name}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -857,6 +1191,59 @@ const nextEpisodeOverlayStyle = {
   flexDirection: 'column',
   minWidth: '200px',
   boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+};
+
+const settingsMenuOverlayStyle = {
+  position: 'absolute',
+  bottom: '70px',
+  right: '20px',
+  background: 'rgba(15, 17, 26, 0.95)',
+  border: '1px solid var(--border-glass)',
+  borderRadius: '12px',
+  zIndex: 15,
+  minWidth: '220px',
+  boxShadow: '0 8px 32px rgba(0,0,0,0.6)'
+};
+
+const settingsSelectStyle = {
+  width: '100%',
+  padding: '6px 10px',
+  borderRadius: '6px',
+  background: 'rgba(0,0,0,0.3)',
+  border: '1px solid rgba(255,255,255,0.1)',
+  color: '#fff',
+  fontSize: '0.85rem',
+  cursor: 'pointer'
+};
+
+const skipIntroButtonStyle = {
+  position: 'absolute',
+  bottom: '90px',
+  right: '30px',
+  padding: '10px 20px',
+  background: 'rgba(0, 0, 0, 0.6)',
+  border: '1px solid var(--border-glass)',
+  borderRadius: '8px',
+  color: '#fff',
+  fontWeight: '600',
+  fontSize: '0.9rem',
+  cursor: 'pointer',
+  zIndex: 10,
+  backdropFilter: 'blur(10px)'
+};
+
+const episodesDrawerStyle = {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  width: '300px',
+  background: 'rgba(10, 11, 16, 0.95)',
+  borderLeft: '1px solid var(--border-glass)',
+  zIndex: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  boxShadow: '-5px 0 20px rgba(0,0,0,0.5)'
 };
 
 const copyLinkButtonStyle = {

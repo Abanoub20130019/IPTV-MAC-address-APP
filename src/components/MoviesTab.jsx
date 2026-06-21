@@ -1,14 +1,28 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
+import { searchTMDB, getTMDBDetails, getTMDBImageUrl } from '../utils/tmdb';
+import * as ReactWindow from 'react-window';
+const Grid = ReactWindow.FixedSizeGrid;
+import * as AutoSizerModule from 'react-virtualized-auto-sizer';
+const AutoSizer = AutoSizerModule.default || AutoSizerModule.AutoSizer || AutoSizerModule;
 
-export default function MoviesTab({ connection }) {
+export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayItem }) {
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [movies, setMovies] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [catSearchQuery, setCatSearchQuery] = useState('');
   const [activeMovie, setActiveMovie] = useState(null);
+  const [tmdbData, setTmdbData] = useState(null);
   const [resolvedStreamUrl, setResolvedStreamUrl] = useState('');
+
+  // Handle global play item
+  useEffect(() => {
+    if (globalPlayItem && globalPlayItem.type === 'vod' && globalPlayItem.item) {
+      handleSelectMovie(globalPlayItem.item);
+      clearGlobalPlayItem();
+    }
+  }, [globalPlayItem]);
   
   // Favorites state
   const [favorites, setFavorites] = useState([]);
@@ -100,18 +114,23 @@ export default function MoviesTab({ connection }) {
         const rawMovies = data.js?.data || data.js || [];
         const items = Array.isArray(rawMovies) ? rawMovies : [];
         
-        // Normalize fields
-        const normalized = items.map(m => ({
-          id: m.id,
-          name: m.name || m.title || 'Untitled Movie',
-          category_id: m.category_id,
-          screenshot_uri: m.screenshot_uri || m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=400&h=600&fit=crop',
-          cmd: m.cmd || m.link || '',
-          director: m.director || 'N/A',
-          year: m.year || 'N/A',
-          rating: m.rating || m.rating_imdb || 'N/A',
-          description: m.description || m.plot || 'No synopsis available.'
-        }));
+        const normalized = items.map(m => {
+          const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
+          const imgUrl = m.screenshot_uri || m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=400&h=600&fit=crop';
+          const resolvedImg = imgUrl.startsWith('http') ? imgUrl : `${portalBase}/${imgUrl.replace(/^\//, '')}`;
+          
+          return {
+            id: m.id,
+            name: m.name || m.title || 'Untitled Movie',
+            category_id: m.category_id,
+            screenshot_uri: resolvedImg,
+            cmd: m.cmd || m.link || '',
+            director: m.director || 'N/A',
+            year: m.year || 'N/A',
+            rating: m.rating || m.rating_imdb || 'N/A',
+            description: m.description || m.plot || 'No synopsis available.'
+          };
+        });
         
         if (page === 1) {
           setMovies(normalized);
@@ -148,24 +167,26 @@ export default function MoviesTab({ connection }) {
     };
   }, [connection, selectedCategory, page]);
 
-  // Setup infinite scroll intersection observer
-  useEffect(() => {
-    if (loadingMovies || loadingMore || !hasMore) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        setPage(prev => prev + 1);
+  // Intersection observer for infinite scroll is replaced by Grid's onItemsRendered or custom scrolling,
+  // but to keep it simple with grid and existing sentinel logic, we can still use sentinel if AutoSizer allows.
+  // Actually, since Grid handles its own scroll, we should hook into Grid's onItemsRendered.
+
+  // Handle movie selection for details modal
+  const handleSelectMovie = async (movie) => {
+    setActiveMovie(movie);
+    setTmdbData(null);
+    
+    // Attempt TMDB Match
+    try {
+      const searchResult = await searchTMDB(movie.name, 'movie', movie.year !== 'N/A' ? movie.year : null);
+      if (searchResult && searchResult.id) {
+        const details = await getTMDBDetails(searchResult.id, 'movie');
+        setTmdbData(details);
       }
-    }, { 
-      root: scrollContainerRef.current,
-      threshold: 0.1 
-    });
-
-    if (sentinelRef.current) {
-      observer.observe(sentinelRef.current);
+    } catch (err) {
+      console.error('TMDB Error:', err);
     }
-
-    return () => observer.disconnect();
-  }, [loadingMovies, loadingMore, hasMore]);
+  };
 
   const handlePlayMovie = async (movie) => {
     setPlayingMovie(movie);
@@ -270,7 +291,7 @@ export default function MoviesTab({ connection }) {
         </div>
 
         {/* Movies Grid */}
-        <div style={contentStyle} ref={scrollContainerRef}>
+        <div style={contentStyle}>
           {loadingMovies && page === 1 ? (
             <div style={loadingContainerStyle}>
               <div className="spinner" style={{ width: '40px', height: '40px' }} />
@@ -285,59 +306,92 @@ export default function MoviesTab({ connection }) {
               </p>
             </div>
           ) : (
-            <>
-              <div style={gridStyle}>
-                {filteredMovies.map(movie => {
-                  const isFav = favorites.includes(movie.id);
+            <div style={{ flex: 1, width: '100%', height: '100%' }}>
+              <AutoSizer>
+                {({ height, width }) => {
+                  const COLUMN_WIDTH = 180 + 15; // card + gap
+                  const ROW_HEIGHT = 280 + 15;
+                  const columnCount = Math.max(1, Math.floor(width / COLUMN_WIDTH));
+                  const rowCount = Math.ceil(filteredMovies.length / columnCount) + (hasMore ? 1 : 0); // extra row for spinner
+                  
                   return (
-                    <div 
-                      key={movie.id} 
-                      className="glass-panel-interactive"
-                      style={{ ...movieCardStyle, position: 'relative' }}
-                      onClick={() => setActiveMovie(movie)}
+                    <Grid
+                      columnCount={columnCount}
+                      columnWidth={COLUMN_WIDTH}
+                      height={height}
+                      rowCount={rowCount}
+                      rowHeight={ROW_HEIGHT}
+                      width={width}
+                      onItemsRendered={({ visibleRowStopIndex }) => {
+                        if (hasMore && !loadingMore && visibleRowStopIndex >= rowCount - 2) {
+                          setPage(prev => prev + 1);
+                        }
+                      }}
                     >
-                      {/* Floating Star Button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFavorite(movie.id);
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '6px',
-                          right: '6px',
-                          background: 'none',
-                          border: 'none',
-                          color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
-                          fontSize: '1.2rem',
-                          cursor: 'pointer',
-                          zIndex: 5,
-                          textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
-                          transition: 'color 0.2s'
-                        }}
-                        title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                      >
-                        ★
-                      </button>
+                      {({ columnIndex, rowIndex, style }) => {
+                        const index = rowIndex * columnCount + columnIndex;
+                        
+                        if (hasMore && rowIndex === rowCount - 1) {
+                          if (columnIndex === 0) {
+                            return (
+                              <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', width: width }}>
+                                <div className="spinner" style={{ width: '30px', height: '30px' }} />
+                              </div>
+                            );
+                          }
+                          return null;
+                        }
 
-                      <img src={movie.screenshot_uri} alt={movie.name} style={posterStyle} />
-                      <div style={movieOverlayStyle}>
-                        <span style={yearTagStyle}>{movie.year}</span>
-                        <h4 style={movieTitleStyle}>{movie.name}</h4>
-                      </div>
-                    </div>
+                        if (index >= filteredMovies.length) return null;
+                        
+                        const movie = filteredMovies[index];
+                        const isFav = favorites.includes(movie.id);
+
+                        return (
+                          <div style={{ ...style, padding: '7.5px' }}>
+                            <div 
+                              className="glass-panel-interactive"
+                              style={{ ...movieCardStyle, position: 'relative', width: '100%', height: '100%', margin: 0 }}
+                              onClick={() => handleSelectMovie(movie)}
+                            >
+                              {/* Floating Star Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleFavorite(movie.id);
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  top: '6px',
+                                  right: '6px',
+                                  background: 'none',
+                                  border: 'none',
+                                  color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
+                                  fontSize: '1.2rem',
+                                  cursor: 'pointer',
+                                  zIndex: 5,
+                                  textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
+                                  transition: 'color 0.2s'
+                                }}
+                                title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                              >
+                                ★
+                              </button>
+
+                              <img src={movie.screenshot_uri} alt={movie.name} style={posterStyle} />
+                              <div style={movieOverlayStyle}>
+                                <span style={yearTagStyle}>{movie.year}</span>
+                                <h4 style={movieTitleStyle}>{movie.name}</h4>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    </Grid>
                   );
-                })}
-              </div>
-              
-              {/* Sentinel indicator for infinite scrolling */}
-              {hasMore && (
-                <div ref={sentinelRef} className="load-more-container">
-                  <div className="spinner" style={{ width: '30px', height: '30px' }} />
-                  <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading more movies...</span>
-                </div>
-              )}
-            </>
+                }}
+              </AutoSizer>
+            </div>
           )}
         </div>
       </div>
@@ -345,7 +399,15 @@ export default function MoviesTab({ connection }) {
       {/* Movie Details Modal */}
       {activeMovie && (
         <div style={modalOverlayStyle}>
-          <div className="glass-panel" style={modalCardStyle}>
+          <div 
+            className="glass-panel" 
+            style={{ 
+              ...modalCardStyle, 
+              backgroundImage: tmdbData?.backdrop_path ? `linear-gradient(to right, rgba(5,5,8,1) 30%, rgba(5,5,8,0.4)), url(${getTMDBImageUrl(tmdbData.backdrop_path, 'original')})` : 'none',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center'
+            }}
+          >
             <button style={closeButtonStyle} onClick={() => {
               setActiveMovie(null);
               setPlayingMovie(null);
@@ -355,14 +417,14 @@ export default function MoviesTab({ connection }) {
             <div style={modalContentGridStyle}>
               {/* Left Column: Image Poster */}
               <div style={modalMediaStyle}>
-                <img src={activeMovie.screenshot_uri} alt={activeMovie.name} style={modalPosterStyle} />
+                <img src={tmdbData?.poster_path ? getTMDBImageUrl(tmdbData.poster_path) : activeMovie.screenshot_uri} alt={activeMovie.name} style={modalPosterStyle} />
               </div>
 
               {/* Right Column: Info */}
               <div style={modalDetailsStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                   <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.8rem', color: 'var(--text-primary)', margin: 0 }}>
-                    {activeMovie.name}
+                    {tmdbData?.title || activeMovie.name}
                   </h2>
                   <button
                     onClick={() => toggleFavorite(activeMovie.id)}
@@ -383,20 +445,88 @@ export default function MoviesTab({ connection }) {
                 </div>
                 
                 <div style={metaContainerStyle}>
-                  <span style={metaItemStyle}>★ {activeMovie.rating}</span>
-                  <span style={metaItemStyle}>{activeMovie.year}</span>
+                  <span style={{...metaItemStyle, color: '#f5c518', fontWeight: 'bold'}}>
+                    ★ {tmdbData ? tmdbData.vote_average?.toFixed(1) : activeMovie.rating}
+                  </span>
+                  <span style={metaItemStyle}>{tmdbData ? tmdbData.release_date?.substring(0,4) : activeMovie.year}</span>
+                  {tmdbData?.runtime > 0 && <span style={metaItemStyle}>{tmdbData.runtime} min</span>}
                   <span style={metaItemStyle}>Dir: {activeMovie.director}</span>
                 </div>
 
-                <p style={descriptionStyle}>{activeMovie.description}</p>
+                <p style={descriptionStyle}>{tmdbData?.overview || activeMovie.description}</p>
 
-                <button 
-                  className="btn-primary" 
-                  style={{ marginTop: '20px', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px' }}
-                  onClick={() => handlePlayMovie(activeMovie)}
-                >
-                  <span style={{ fontSize: '1.1rem' }}>▶</span> WATCH NOW IN THEATER MODE
-                </button>
+                {tmdbData?.genres && (
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '15px' }}>
+                    {tmdbData.genres.map(g => (
+                      <span key={g.id} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: '12px' }}>{g.name}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Cast */}
+                {tmdbData?.credits?.cast && tmdbData.credits.cast.length > 0 && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <strong style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Top Cast</strong>
+                    <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px' }}>
+                      {tmdbData.credits.cast.slice(0, 5).map(actor => (
+                        <div key={actor.id} style={{ textAlign: 'center', minWidth: '70px' }}>
+                          <div style={{ width: '50px', height: '50px', borderRadius: '25px', overflow: 'hidden', margin: '0 auto 5px', background: 'rgba(255,255,255,0.1)' }}>
+                            {actor.profile_path ? (
+                              <img src={getTMDBImageUrl(actor.profile_path, 'w200')} alt={actor.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>N/A</div>
+                            )}
+                          </div>
+                          <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{actor.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '15px', marginTop: '20px' }}>
+                  <button 
+                    className="btn-primary" 
+                    style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}
+                    onClick={() => handlePlayMovie(activeMovie)}
+                  >
+                    <span style={{ fontSize: '1.1rem' }}>▶</span> WATCH NOW
+                  </button>
+                  
+                  {tmdbData?.videos?.results?.find(v => v.type === 'Trailer' && v.site === 'YouTube') && (
+                    <a 
+                      href={`https://www.youtube.com/watch?v=${tmdbData.videos.results.find(v => v.type === 'Trailer').key}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-secondary"
+                      style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', textDecoration: 'none' }}
+                    >
+                      Trailer
+                    </a>
+                  )}
+                </div>
+
+                {/* More Like This */}
+                {tmdbData?.recommendations?.results && tmdbData.recommendations.results.length > 0 && (
+                  <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
+                    <strong style={{ display: 'block', marginBottom: '10px', fontSize: '0.95rem', color: 'var(--text-primary)' }}>More Like This</strong>
+                    <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '10px' }}>
+                      {tmdbData.recommendations.results.slice(0, 10).map(rec => (
+                        <div key={rec.id} style={{ minWidth: '100px', cursor: 'pointer' }}>
+                          <img 
+                            src={rec.poster_path ? getTMDBImageUrl(rec.poster_path, 'w200') : 'https://via.placeholder.com/100x150?text=No+Poster'} 
+                            alt={rec.title} 
+                            style={{ width: '100px', height: '150px', borderRadius: '8px', objectFit: 'cover', marginBottom: '5px' }} 
+                          />
+                          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {rec.title}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
               </div>
             </div>
           </div>

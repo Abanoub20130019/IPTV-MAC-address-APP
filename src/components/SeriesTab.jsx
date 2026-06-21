@@ -1,26 +1,40 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
+import { searchTMDB, getTMDBDetails, getTMDBImageUrl } from '../utils/tmdb';
+import * as ReactWindow from 'react-window';
+const Grid = ReactWindow.FixedSizeGrid;
+import * as AutoSizerModule from 'react-virtualized-auto-sizer';
+const AutoSizer = AutoSizerModule.default || AutoSizerModule.AutoSizer || AutoSizerModule;
 
-export default function SeriesTab({ connection }) {
+export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayItem }) {
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [seriesList, setSeriesList] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [catSearchQuery, setCatSearchQuery] = useState('');
+
+  // Handle global play item
+  useEffect(() => {
+    if (globalPlayItem && globalPlayItem.type === 'series' && globalPlayItem.item) {
+      handleSelectSeries(globalPlayItem.item);
+      clearGlobalPlayItem();
+    }
+  }, [globalPlayItem]);
   
-  // Favorites state
+  // Favorites and Continue Watching state
   const [favorites, setFavorites] = useState([]);
+  const [continueWatching, setContinueWatching] = useState([]);
 
   // Pagination state
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const sentinelRef = React.useRef(null);
   const scrollContainerRef = React.useRef(null);
   const isFetchingRef = React.useRef(false);
   
   // Selected Series, Seasons & Episodes state
   const [activeSeries, setActiveSeries] = useState(null);
+  const [tmdbData, setTmdbData] = useState(null);
   const [seasonsList, setSeasonsList] = useState([]);
   const [selectedSeason, setSelectedSeason] = useState(null);
   const [episodes, setEpisodes] = useState([]);
@@ -53,6 +67,26 @@ export default function SeriesTab({ connection }) {
     setFavorites(updated);
     localStorage.setItem('helix_iptv_favorites', JSON.stringify(updated));
   };
+
+  // Load Continue Watching from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem('helix_iptv_progress');
+    if (saved) {
+      try {
+        const progressObj = JSON.parse(saved);
+        const cw = Object.entries(progressObj)
+          .filter(([k, v]) => typeof v === 'object' && v.seriesId && v.time)
+          .map(([k, v]) => ({
+            streamId: k,
+            ...v
+          }))
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        setContinueWatching(cw);
+      } catch (e) {
+        console.error('Failed to parse continue watching:', e);
+      }
+    }
+  }, [showTheaterMode]);
 
   // Fetch Series Categories
   useEffect(() => {
@@ -105,14 +139,21 @@ export default function SeriesTab({ connection }) {
 
         const rawList = data.js?.data || data.js || [];
         const items = Array.isArray(rawList) ? rawList : [];
-        
-        const normalized = items.map(s => ({
-          id: s.video_id || s.id,
-          name: s.name || s.title || 'Untitled Series',
-          category_id: s.category_id,
-          screenshot_uri: s.screenshot_uri || s.poster || 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=400&h=600&fit=crop',
-          description: s.description || s.plot || 'No description available.'
-        }));
+        const normalized = items.map(s => {
+          const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
+          const imgUrl = s.cover || s.screenshot_uri || 'https://images.unsplash.com/photo-1593118247619-e2d6f056869e?w=400&h=600&fit=crop';
+          const resolvedImg = imgUrl.startsWith('http') ? imgUrl : `${portalBase}/${imgUrl.replace(/^\//, '')}`;
+          return {
+            id: s.id,
+            name: s.name || s.title || 'Untitled Series',
+            category_id: s.category_id,
+            screenshot_uri: resolvedImg,
+            director: s.director || 'N/A',
+            year: s.year || 'N/A',
+            rating: s.rating || s.rating_imdb || 'N/A',
+            description: s.description || s.plot || 'No synopsis available.'
+          };
+        });
         
         if (page === 1) {
           setSeriesList(normalized);
@@ -149,24 +190,21 @@ export default function SeriesTab({ connection }) {
     };
   }, [connection, selectedCategory, page]);
 
-  // Intersection observer for series infinite scroll
-  useEffect(() => {
-    if (loadingSeries || loadingMore || !hasMore) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        setPage(prev => prev + 1);
+  // Handle Series Selection & TMDB Fetch
+  const handleSelectSeries = async (series) => {
+    setActiveSeries(series);
+    setTmdbData(null);
+    
+    try {
+      const searchResult = await searchTMDB(series.name, 'tv');
+      if (searchResult && searchResult.id) {
+        const details = await getTMDBDetails(searchResult.id, 'tv');
+        setTmdbData(details);
       }
-    }, { 
-      root: scrollContainerRef.current,
-      threshold: 0.1 
-    });
-
-    if (sentinelRef.current) {
-      observer.observe(sentinelRef.current);
+    } catch (err) {
+      console.error('TMDB Error:', err);
     }
-
-    return () => observer.disconnect();
-  }, [loadingSeries, loadingMore, hasMore]);
+  };
 
   // Fetch Seasons when Active Series is selected
   useEffect(() => {
@@ -281,6 +319,10 @@ export default function SeriesTab({ connection }) {
     }
   };
 
+  const handleEpisodeSelect = (ep) => {
+    handlePlayEpisode(ep);
+  };
+
   const handleNextEpisode = () => {
     if (!activeEpisode || !episodes) return;
     const currentIndex = episodes.findIndex(ep => ep.id === activeEpisode.id);
@@ -378,56 +420,125 @@ export default function SeriesTab({ connection }) {
             </div>
           ) : (
             <>
-              <div style={gridStyle}>
-                {filteredSeries.map(series => {
-                  const isFav = favorites.includes(series.id);
-                  return (
-                    <div 
-                      key={series.id} 
-                      className="glass-panel-interactive"
-                      style={{ ...seriesCardStyle, position: 'relative' }}
-                      onClick={() => setActiveSeries(series)}
-                    >
-                      {/* Floating Star Button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFavorite(series.id);
+              {/* Continue Watching Row */}
+              {page === 1 && selectedCategory === 'all' && continueWatching.length > 0 && searchQuery === '' && (
+                <div style={{ marginBottom: '30px' }}>
+                  <h3 style={{ ...sidebarTitleStyle, marginBottom: '12px' }}>Continue Watching</h3>
+                  <div style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px' }} className="hide-scrollbar">
+                    {continueWatching.map(cw => (
+                      <div 
+                        key={cw.streamId}
+                        className="glass-panel-interactive"
+                        style={{ minWidth: '240px', width: '240px', height: '135px', position: 'relative', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', flexShrink: 0 }}
+                        onClick={() => {
+                          handleSelectSeries({
+                            id: cw.seriesId,
+                            name: cw.seriesName,
+                            screenshot_uri: cw.screenshot_uri,
+                            description: 'Resume playing from where you left off.'
+                          });
                         }}
-                        style={{
-                          position: 'absolute',
-                          top: '6px',
-                          right: '6px',
-                          background: 'none',
-                          border: 'none',
-                          color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
-                          fontSize: '1.2rem',
-                          cursor: 'pointer',
-                          zIndex: 5,
-                          textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
-                          transition: 'color 0.2s'
-                        }}
-                        title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
                       >
-                        ★
-                      </button>
-
-                      <img src={series.screenshot_uri} alt={series.name} style={posterStyle} />
-                      <div style={movieOverlayStyle}>
-                        <h4 style={seriesTitleStyle}>{series.name}</h4>
+                        <img src={cw.screenshot_uri} alt={cw.seriesName} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} />
+                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.9))', padding: '10px' }}>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cw.seriesName}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--accent-primary)' }}>{cw.seasonName} • Ep {cw.epNum}</div>
+                        </div>
+                        {/* Play Icon */}
+                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '8px' }}>
+                          <svg style={{ width: '24px', height: '24px', color: '#fff' }} viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-              
-              {/* Infinite scroll loader */}
-              {hasMore && (
-                <div ref={sentinelRef} className="load-more-container">
-                  <div className="spinner" style={{ width: '30px', height: '30px' }} />
-                  <span style={{ marginLeft: '10px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading more series...</span>
+                    ))}
+                  </div>
                 </div>
               )}
+
+              <div style={{ flex: 1, width: '100%', height: '100%', minHeight: '500px' }}>
+                <AutoSizer>
+                  {({ height, width }) => {
+                    const COLUMN_WIDTH = 180 + 15; // card + gap
+                    const ROW_HEIGHT = 280 + 15;
+                    const columnCount = Math.max(1, Math.floor(width / COLUMN_WIDTH));
+                    const rowCount = Math.ceil(filteredSeries.length / columnCount) + (hasMore ? 1 : 0); // extra row for spinner
+                    
+                    return (
+                      <Grid
+                        columnCount={columnCount}
+                        columnWidth={COLUMN_WIDTH}
+                        height={height}
+                        rowCount={rowCount}
+                        rowHeight={ROW_HEIGHT}
+                        width={width}
+                        onItemsRendered={({ visibleRowStopIndex }) => {
+                          if (hasMore && !loadingMore && visibleRowStopIndex >= rowCount - 2) {
+                            setPage(prev => prev + 1);
+                          }
+                        }}
+                      >
+                        {({ columnIndex, rowIndex, style }) => {
+                          const index = rowIndex * columnCount + columnIndex;
+                          
+                          if (hasMore && rowIndex === rowCount - 1) {
+                            if (columnIndex === 0) {
+                              return (
+                                <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', width: width }}>
+                                  <div className="spinner" style={{ width: '30px', height: '30px' }} />
+                                </div>
+                              );
+                            }
+                            return null;
+                          }
+
+                          if (index >= filteredSeries.length) return null;
+                          
+                          const series = filteredSeries[index];
+                          const isFav = favorites.includes(series.id);
+
+                          return (
+                            <div style={{ ...style, padding: '7.5px' }}>
+                              <div 
+                                className="glass-panel-interactive"
+                                style={{ ...seriesCardStyle, position: 'relative', width: '100%', height: '100%', margin: 0 }}
+                                onClick={() => handleSelectSeries(series)}
+                              >
+                                {/* Floating Star Button */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleFavorite(series.id);
+                                  }}
+                                  style={{
+                                    position: 'absolute',
+                                    top: '6px',
+                                    right: '6px',
+                                    background: 'none',
+                                    border: 'none',
+                                    color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
+                                    fontSize: '1.2rem',
+                                    cursor: 'pointer',
+                                    zIndex: 5,
+                                    textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
+                                    transition: 'color 0.2s'
+                                  }}
+                                  title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                                >
+                                  ★
+                                </button>
+
+                                <img src={series.screenshot_uri} alt={series.name} style={posterStyle} />
+                                <div style={movieOverlayStyle}>
+                                  <h4 style={seriesTitleStyle}>{series.name}</h4>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      </Grid>
+                    );
+                  }}
+                </AutoSizer>
+              </div>
             </>
           )}
         </div>
@@ -436,7 +547,15 @@ export default function SeriesTab({ connection }) {
       {/* Series Episodes & Season Details Modal */}
       {activeSeries && (
         <div style={modalOverlayStyle}>
-          <div className="glass-panel" style={modalCardStyle}>
+          <div 
+            className="glass-panel" 
+            style={{ 
+              ...modalCardStyle,
+              backgroundImage: tmdbData?.backdrop_path ? `linear-gradient(to right, rgba(5,5,8,1) 30%, rgba(5,5,8,0.4)), url(${getTMDBImageUrl(tmdbData.backdrop_path, 'original')})` : 'none',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center'
+            }}
+          >
             <button style={closeButtonStyle} onClick={() => {
               setActiveSeries(null);
               setSelectedSeason(null);
@@ -447,14 +566,14 @@ export default function SeriesTab({ connection }) {
             <div style={modalContentGridStyle}>
               {/* Left Column: Image Poster */}
               <div style={modalMediaStyle}>
-                <img src={activeSeries.screenshot_uri} alt={activeSeries.name} style={modalPosterStyle} />
+                <img src={tmdbData?.poster_path ? getTMDBImageUrl(tmdbData.poster_path) : activeSeries.screenshot_uri} alt={activeSeries.name} style={modalPosterStyle} />
               </div>
 
               {/* Right Column: Info & Seasons / Episodes list */}
               <div style={infoColStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                   <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.6rem', color: 'var(--text-primary)', margin: 0 }}>
-                    {activeSeries.name}
+                    {tmdbData?.name || activeSeries.name}
                   </h2>
                   <button
                     onClick={() => toggleFavorite(activeSeries.id)}
@@ -473,7 +592,45 @@ export default function SeriesTab({ connection }) {
                     ★
                   </button>
                 </div>
-                <p style={descriptionStyle}>{activeSeries.description}</p>
+
+                <div style={{ display: 'flex', gap: '15px', marginTop: '10px', fontSize: '0.85rem' }}>
+                  <span style={{ color: '#f5c518', fontWeight: 'bold' }}>
+                    ★ {tmdbData ? tmdbData.vote_average?.toFixed(1) : ''}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>{tmdbData ? tmdbData.first_air_date?.substring(0,4) : ''}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{tmdbData?.number_of_seasons ? `${tmdbData.number_of_seasons} Seasons` : ''}</span>
+                </div>
+
+                <p style={{ ...descriptionStyle, marginTop: '10px' }}>{tmdbData?.overview || activeSeries.description}</p>
+
+                {tmdbData?.genres && (
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '15px' }}>
+                    {tmdbData.genres.map(g => (
+                      <span key={g.id} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}>{g.name}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Cast */}
+                {tmdbData?.credits?.cast && tmdbData.credits.cast.length > 0 && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <strong style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Top Cast</strong>
+                    <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px' }}>
+                      {tmdbData.credits.cast.slice(0, 5).map(actor => (
+                        <div key={actor.id} style={{ textAlign: 'center', minWidth: '70px' }}>
+                          <div style={{ width: '50px', height: '50px', borderRadius: '25px', overflow: 'hidden', margin: '0 auto 5px', background: 'rgba(255,255,255,0.1)' }}>
+                            {actor.profile_path ? (
+                              <img src={getTMDBImageUrl(actor.profile_path, 'w200')} alt={actor.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>N/A</div>
+                            )}
+                          </div>
+                          <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{actor.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Season Tabs Selector */}
                 {seasonsList.length > 0 && (
@@ -551,6 +708,27 @@ export default function SeriesTab({ connection }) {
                     <p style={{ marginTop: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Loading episodes...</p>
                   </div>
                 )}
+
+                {/* More Like This */}
+                {tmdbData?.recommendations?.results && tmdbData.recommendations.results.length > 0 && (
+                  <div style={{ marginTop: '30px' }}>
+                    <h4 style={subTitleStyle}>More Like This</h4>
+                    <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '10px' }} className="hide-scrollbar">
+                      {tmdbData.recommendations.results.slice(0, 10).map(rec => (
+                        <div key={rec.id} style={{ minWidth: '100px', cursor: 'pointer', flexShrink: 0 }}>
+                          <img 
+                            src={rec.poster_path ? getTMDBImageUrl(rec.poster_path, 'w200') : 'https://via.placeholder.com/100x150?text=No+Poster'} 
+                            alt={rec.name} 
+                            style={{ width: '100px', height: '150px', borderRadius: '8px', objectFit: 'cover', marginBottom: '5px' }} 
+                          />
+                          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {rec.name}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -601,6 +779,17 @@ export default function SeriesTab({ connection }) {
                   ? handlePrevEpisode
                   : null
                 }
+                episodesList={episodes}
+                activeEpisodeId={activeEpisode.id}
+                onEpisodeSelect={handleEpisodeSelect}
+                seriesInfo={{
+                  seriesId: activeSeries.id,
+                  seriesName: activeSeries.name,
+                  seasonName: seasonsList.find(s => s.id === selectedSeason)?.name || `Season ${selectedSeason}`,
+                  epName: activeEpisode.name,
+                  epNum: activeEpisode.episodeNumber,
+                  screenshot_uri: activeSeries.screenshot_uri
+                }}
               />
             ) : (
               <div style={theaterPlaceholderStyle}>

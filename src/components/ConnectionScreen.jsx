@@ -15,8 +15,7 @@ export default function ConnectionScreen({ onConnectSuccess }) {
   // Manual add form
   const [portalUrl, setPortalUrl] = useState('');
   const [mac, setMac] = useState('00:1A:79:');
-  const [manualExpiry, setManualExpiry] = useState('');
-  const [manualChannels, setManualChannels] = useState('');
+  const [newProfileName, setNewProfileName] = useState('');
   
   // Connection steps & loaders
   const [loading, setLoading] = useState(false);
@@ -34,107 +33,44 @@ export default function ConnectionScreen({ onConnectSuccess }) {
   const [sortBy, setSortBy] = useState('none'); // 'none', 'expiry', 'channels'
   const [sortOrder, setSortOrder] = useState('asc'); // 'asc', 'desc'
 
-  // Load profiles from LocalStorage on mount
+  const [isImporting, setIsImporting] = useState(false);
+
+  // Load profiles from Backend API on mount
   useEffect(() => {
-    const saved = localStorage.getItem('helix_iptv_profiles');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          setProfiles(parsed);
-        }
-      } catch (e) {
-        console.error('Failed to parse saved profiles:', e);
-      }
-    }
+    fetchProfiles();
   }, []);
 
-  // Save profiles helper
-  const saveProfilesToStorage = (updatedList) => {
-    setProfiles(updatedList);
-    localStorage.setItem('helix_iptv_profiles', JSON.stringify(updatedList));
-  };
-
-  // Evaluate date expiration
-  const checkDateExpiry = (dateStr) => {
-    if (!dateStr || dateStr === 'Unknown' || dateStr === 'N/A') return 'unknown';
+  // Fetch profiles helper
+  const fetchProfiles = async () => {
+    const token = localStorage.getItem('helix_iptv_token');
+    if (!token) return;
     try {
-      const cleanDateStr = dateStr.replace(/,\s*\d+:\d+\s*(am|pm)/i, ''); // Strip time strings
-      const expDate = new Date(cleanDateStr);
-      if (isNaN(expDate.getTime())) return 'unknown';
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      expDate.setHours(0, 0, 0, 0);
-
-      if (expDate < today) {
-        return 'expired';
-      }
-      return 'active';
-    } catch (e) {
-      return 'unknown';
-    }
-  };
-
-  // Bulk Import text parser
-  const handleBulkImport = () => {
-    if (!bulkText.trim()) return;
-
-    // Splits into blocks that start with Portal:
-    const entries = bulkText.split(/(?=Portal\s*:)/i);
-    const parsedList = [];
-    let importCount = 0;
-
-    entries.forEach(entry => {
-      entry = entry.trim();
-      if (!entry) return;
-
-      const portalMatch = entry.match(/Portal\s*:\s*(https?:\/\/[^\s\n]+)/i);
-      const macMatch = entry.match(/MAC\s*(Addr)?\s*:\s*([0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})/i);
-      const expMatch = entry.match(/Exp\s*(date)?\s*:\s*([^\n]+)/i);
-      const chanMatch = entry.match(/Channels\s*:\s*(\d+)/i);
-
-      if (portalMatch && macMatch) {
-        const pUrl = portalMatch[1].trim();
-        const pMac = macMatch[2].trim();
-        const pId = btoa(`${pUrl}|${pMac}`);
-        const pExp = expMatch ? expMatch[2].trim() : 'Unknown';
-        
-        // Evaluate initial expired status if date is in past
-        const initialStatus = checkDateExpiry(pExp) === 'expired' ? 'expired' : 'unknown';
-
-        parsedList.push({
-          id: pId,
-          portalUrl: pUrl,
-          mac: pMac,
-          expDate: pExp,
-          channelsCount: chanMatch ? chanMatch[1].trim() : 'Unknown',
-          status: initialStatus,
-          errorMessage: initialStatus === 'expired' ? 'Profile is expired according to import details.' : '',
+      const res = await fetch('/api/auth/verify', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const localMeta = JSON.parse(localStorage.getItem('helix_iptv_metadata') || '{}');
+        const mapped = data.profiles.map(p => ({
+          id: p.id,
+          profile_name: p.profile_name,
+          portalUrl: p.portal_url,
+          mac: p.mac,
+          status: 'unknown',
+          expDate: p.expiry_date || (localMeta[p.mac] ? localMeta[p.mac].expiry : null) || 'Managed Online',
+          channelsCount: p.channels || (localMeta[p.mac] ? localMeta[p.mac].channels : null) || 'N/A',
+          errorMessage: '',
           lastChecked: ''
-        });
-        importCount++;
+        }));
+        setProfiles(mapped);
       }
-    });
-
-    if (parsedList.length > 0) {
-      // Append unique items, avoiding duplicates
-      const existingIds = new Set(profiles.map(p => p.id));
-      const filteredNew = parsedList.filter(p => !existingIds.has(p.id));
-      
-      const newList = [...profiles, ...filteredNew];
-      saveProfilesToStorage(newList);
-      alert(`Imported ${filteredNew.length} new profiles successfully! (Skipped ${parsedList.length - filteredNew.length} duplicates)`);
-    } else {
-      alert('Failed to parse any valid profiles. Check format: Portal, MAC Addr, Exp date, Channels.');
+    } catch (err) {
+      console.error('Failed to load profiles:', err);
     }
-
-    setBulkText('');
-    setShowBulkModal(false);
   };
 
   // Manual Profile Save & Connect
-  const handleSaveManual = (e) => {
+  const handleSaveManual = async (e) => {
     e.preventDefault();
     if (!portalUrl.trim() || !mac.trim()) {
       alert('Please enter Portal URL and MAC Address.');
@@ -146,58 +82,202 @@ export default function ConnectionScreen({ onConnectSuccess }) {
       alert('Please enter a valid MAC Address (e.g., 00:1A:79:7D:CD:70).');
       return;
     }
-
     const cleanUrl = portalUrl.trim();
-    const pId = btoa(`${cleanUrl}|${cleanMac}`);
+    const pName = newProfileName.trim() || 'My Server';
 
-    // Check for duplicates
-    if (profiles.some(p => p.id === pId)) {
-      alert('This profile already exists in the list.');
-      return;
+    try {
+      const res = await fetch('/api/auth/profiles', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('helix_iptv_token')}`
+        },
+        body: JSON.stringify({ profile_name: pName, mac: cleanMac, portal_url: cleanUrl })
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      
+      setPortalUrl('');
+      setMac('00:1A:79:');
+      setNewProfileName('');
+      fetchProfiles();
+    } catch (err) {
+      alert(err.message);
     }
-
-    const initialStatus = checkDateExpiry(manualExpiry) === 'expired' ? 'expired' : 'unknown';
-
-    const newProfile = {
-      id: pId,
-      portalUrl: cleanUrl,
-      mac: cleanMac,
-      expDate: manualExpiry.trim() || 'Unknown',
-      channelsCount: manualChannels.trim() || 'Unknown',
-      status: initialStatus,
-      errorMessage: initialStatus === 'expired' ? 'Profile expired.' : '',
-      lastChecked: ''
-    };
-
-    saveProfilesToStorage([...profiles, newProfile]);
-    setSelectedProfile(newProfile);
-    
-    // Reset form
-    setPortalUrl('');
-    setMac('00:1A:79:');
-    setManualExpiry('');
-    setManualChannels('');
   };
 
   // Delete profile
-  const handleDeleteProfile = (id, e) => {
+  const handleDeleteProfile = async (id, e) => {
     e.stopPropagation();
-    const updated = profiles.filter(p => p.id !== id);
-    saveProfilesToStorage(updated);
-    if (selectedProfile?.id === id) {
-      setSelectedProfile(null);
+    try {
+      const res = await fetch(`/api/auth/profiles/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('helix_iptv_token')}` }
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      if (selectedProfile?.id === id) setSelectedProfile(null);
+      fetchProfiles();
+    } catch (err) {
+      alert(err.message);
     }
   };
 
   // Clean Dead & Expired
-  const handleCleanDead = () => {
+  const handleCleanDead = async () => {
     if (window.confirm('Delete all Dead and Expired profiles from the list?')) {
-      const updated = profiles.filter(p => p.status !== 'dead' && p.status !== 'expired');
-      saveProfilesToStorage(updated);
+      const deadProfiles = profiles.filter(p => p.status === 'dead' || p.status === 'expired');
+      for (const p of deadProfiles) {
+        try {
+          await fetch(`/api/auth/profiles/${p.id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('helix_iptv_token')}` }
+          });
+        } catch (e) {
+          console.error('Failed to delete dead profile', p.id);
+        }
+      }
       if (selectedProfile && (selectedProfile.status === 'dead' || selectedProfile.status === 'expired')) {
         setSelectedProfile(null);
       }
+      fetchProfiles();
     }
+  };
+
+  // Delete All profiles
+  const handleDeleteAll = async () => {
+    if (window.confirm('Are you sure you want to delete ALL profiles? This cannot be undone.')) {
+      try {
+        await fetch(`/api/admin/delete-all-profiles`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('helix_iptv_token')}` }
+        });
+        setSelectedProfile(null);
+        fetchProfiles();
+      } catch (e) {
+        alert('Failed to delete all profiles.');
+      }
+    }
+  };
+
+  // Bulk Import
+  const [bulkData, setBulkData] = useState('');
+  const [showBulkImport, setShowBulkImport] = useState(false);
+
+  const handleBulkImport = async () => {
+    if (!bulkData.trim()) return;
+    setIsImporting(true);
+    
+    let importedCount = 0;
+    let failedCount = 0;
+    
+    const lines = bulkData.split('\n');
+    let currentProfile = {};
+    const profilesToAdd = [];
+
+    for (const line of lines) {
+      const text = line.trim();
+      if (!text) {
+        if (currentProfile.mac && currentProfile.url) {
+          profilesToAdd.push({ ...currentProfile });
+        }
+        currentProfile = {};
+        continue;
+      }
+      
+      const macMatch = text.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/i);
+      if (macMatch) currentProfile.mac = macMatch[0];
+
+      const urlMatch = text.match(/(http[s]?:\/\/[^\s]+)/i);
+      if (urlMatch) {
+        currentProfile.url = urlMatch[1];
+      } else if (!currentProfile.url) {
+        // Fallback for domains without http
+        const domainMatch = text.match(/([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?::\d+)?(?:\/[^\s]*)?)/);
+        if (domainMatch && !domainMatch[0].match(/^\d{1,2}\.\d{1,2}\.\d{2,4}$/)) {
+           currentProfile.url = domainMatch[0];
+        }
+      }
+
+      const expMatch = text.match(/Exp(?:iry)?\s*date\s*:\s*(.+)/i);
+      if (expMatch) currentProfile.expiry = expMatch[1].trim();
+
+      const chanMatch = text.match(/Channels\s*:\s*(\d+)/i);
+      if (chanMatch) currentProfile.channels = chanMatch[1].trim();
+      
+      // If it's a simple one-liner (url + mac on same line) and doesn't look like a block label
+      if (macMatch && urlMatch && !text.toLowerCase().includes('portal  :')) {
+        profilesToAdd.push({ ...currentProfile });
+        currentProfile = {}; 
+      }
+    }
+    
+    // End of text, push if any pending
+    if (currentProfile.mac && currentProfile.url) {
+      profilesToAdd.push({ ...currentProfile });
+    }
+
+    if (profilesToAdd.length === 0) {
+      alert('Could not find any valid MAC addresses with associated Portal URLs. Please check the format.');
+      return;
+    }
+
+    // Process all requests concurrently for massive speed up
+    const importPromises = profilesToAdd.map(async (p, idx) => {
+      let finalUrl = p.url.trim();
+      if (!finalUrl.startsWith('http')) finalUrl = `http://${finalUrl}`;
+      
+      const res = await fetch('/api/auth/profiles', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('helix_iptv_token')}`
+        },
+        body: JSON.stringify({ 
+          profile_name: `Bulk Server ${importedCount + idx + 1}`, 
+          mac: p.mac.trim(), 
+          portal_url: finalUrl,
+          channels: p.channels,
+          expiry_date: p.expiry
+        })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      
+      return { p, data };
+    });
+
+    try {
+      const results = await Promise.allSettled(importPromises);
+      
+      const localMeta = JSON.parse(localStorage.getItem('helix_iptv_metadata') || '{}');
+      let needsMetaSave = false;
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const { p, data } = result.value;
+          
+          localMeta[p.mac] = { channels: p.channels, expiry: p.expiry };
+          needsMetaSave = true;
+
+          if (data.skipped) failedCount++;
+          else importedCount++;
+        } else {
+          failedCount++;
+        }
+      }
+
+      if (needsMetaSave) {
+        localStorage.setItem('helix_iptv_metadata', JSON.stringify(localMeta));
+      }
+    } catch (e) {
+      console.error('Bulk import error', e);
+    }
+    
+    setBulkData('');
+    setShowBulkImport(false);
+    setIsImporting(false);
+    fetchProfiles();
+    alert(`Successfully imported ${importedCount} profiles!\n${failedCount > 0 ? `Failed to save or skipped ${failedCount} items (duplicates or errors).` : ''}`);
   };
 
   // Test All saved profiles sequentially
@@ -239,17 +319,7 @@ export default function ConnectionScreen({ onConnectSuccess }) {
       setTestProgress({ current: processedCount, total: targetProfiles.length });
 
       try {
-        // Evaluate expiration date locally first
-        const dateStatus = checkDateExpiry(p.expDate);
-        if (dateStatus === 'expired') {
-          updated[i] = {
-            ...p,
-            status: 'expired',
-            errorMessage: 'Profile has expired based on expiration date details.',
-            lastChecked: new Date().toLocaleString()
-          };
-          continue;
-        }
+        const dateStatus = 'unknown'; // We don't have local expiry checks anymore
 
         const res = await fetch('/api/connect', {
           method: 'POST',
@@ -283,7 +353,6 @@ export default function ConnectionScreen({ onConnectSuccess }) {
       }
 
       setProfiles([...updated]);
-      localStorage.setItem('helix_iptv_profiles', JSON.stringify(updated));
     }
 
     setIsTestingAll(false);
@@ -340,7 +409,7 @@ export default function ConnectionScreen({ onConnectSuccess }) {
         }
         return p;
       });
-      saveProfilesToStorage(updatedList);
+      setProfiles(updatedList);
 
       setTimeout(() => {
         onConnectSuccess({
@@ -363,7 +432,7 @@ export default function ConnectionScreen({ onConnectSuccess }) {
         }
         return p;
       });
-      saveProfilesToStorage(updatedList);
+      setProfiles(updatedList);
     } finally {
       setLoading(false);
       setConnectingProfileId(null);
@@ -454,20 +523,13 @@ export default function ConnectionScreen({ onConnectSuccess }) {
         <div className="glass-panel" style={leftPanelStyle}>
           <div style={headerSectionStyle}>
             <div>
-              <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.4rem', color: 'var(--text-primary)' }}>Stalker Profile Manager</h2>
+              <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.4rem', color: 'var(--text-primary)' }}>Your Servers</h2>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                Bulk import, verify expiration dates, and test connections.
+                Select a server to connect, or add a new one below.
               </p>
             </div>
             
             <div style={actionButtonsGroupStyle}>
-              <button 
-                className="btn-primary" 
-                style={importButtonStyle} 
-                onClick={() => setShowBulkModal(true)}
-              >
-                📥 Bulk Import
-              </button>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                 <select 
                   value={testScope} 
@@ -485,19 +547,41 @@ export default function ConnectionScreen({ onConnectSuccess }) {
                   onClick={() => handleTestAll(testScope)}
                   disabled={isTestingAll || profiles.length === 0}
                 >
-                  {isTestingAll ? `Testing (${testProgress.current}/${testProgress.total})` : '🔍 Run'}
+                  {isTestingAll ? `Testing (${testProgress.current}/${testProgress.total})` : '🔍 Run Check'}
+                </button>
+                <button className="btn-secondary" style={testButtonStyle} onClick={handleCleanDead}>
+                  Clean Dead
+                </button>
+                <button className="btn-secondary" style={{...testButtonStyle, borderColor: 'var(--accent-error)', color: 'var(--accent-error)'}} onClick={handleDeleteAll}>
+                  Delete All
+                </button>
+                <button className="btn-secondary" style={testButtonStyle} onClick={() => setShowBulkImport(!showBulkImport)}>
+                  Bulk Import
                 </button>
               </div>
-              <button 
-                className="btn-secondary" 
-                style={cleanButtonStyle} 
-                onClick={handleCleanDead}
-                disabled={profiles.length === 0}
-              >
-                🗑 Clean Dead
-              </button>
             </div>
           </div>
+
+          {showBulkImport && (
+            <div style={{ padding: '16px', backgroundColor: 'rgba(0,0,0,0.2)', borderBottom: '1px solid var(--border-glass)' }}>
+              <h4 style={{ color: 'var(--text-primary)', marginBottom: '8px', fontSize: '0.9rem' }}>Paste MACs and URLs (any format)</h4>
+              <textarea
+                value={bulkData}
+                onChange={(e) => setBulkData(e.target.value)}
+                placeholder="http://example.com/c 00:1A:79:00:00:00\nhttp://another.com/c 00:1A:79:11:11:11"
+                style={{
+                  ...searchFieldStyle,
+                  width: '100%',
+                  height: '80px',
+                  resize: 'vertical',
+                  marginBottom: '8px'
+                }}
+              />
+              <button className="btn-primary" onClick={handleBulkImport} disabled={isImporting}>
+                {isImporting ? 'Importing...' : 'Import Servers'}
+              </button>
+            </div>
+          )}
 
           {/* Tester status progress bar */}
           {isTestingAll && (
@@ -790,32 +874,20 @@ export default function ConnectionScreen({ onConnectSuccess }) {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div>
-                    <label style={manualLabelStyle}>EXPIRATION DATE</label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="August 12, 2026"
-                      value={manualExpiry}
-                      onChange={(e) => setManualExpiry(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label style={manualLabelStyle}>CHANNELS NUMBER</label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="3960"
-                      value={manualChannels}
-                      onChange={(e) => setManualChannels(e.target.value)}
-                    />
-                  </div>
+                <div>
+                  <label style={manualLabelStyle}>PROFILE ALIAS / NAME</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder="e.g. My Living Room TV"
+                    value={newProfileName}
+                    onChange={(e) => setNewProfileName(e.target.value)}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
                   <button type="submit" className="btn-primary" style={{ flex: 1, padding: '12px' }}>
-                    Save to List
+                    Save Profile Online
                   </button>
                   <button 
                     type="button" 
@@ -838,38 +910,6 @@ export default function ConnectionScreen({ onConnectSuccess }) {
         </div>
 
       </div>
-
-      {/* BULK IMPORT MODAL OVERLAY */}
-      {showBulkModal && (
-        <div style={modalOverlayStyle}>
-          <div className="glass-panel" style={modalCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.2rem' }}>Bulk Import Stalker Profiles</h3>
-              <button style={modalCloseButtonStyle} onClick={() => setShowBulkModal(false)}>✕</button>
-            </div>
-            
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: '1.4' }}>
-              Paste text containing one or more credentials. The parser automatically extracts the repeating block sections.
-            </p>
-
-            <textarea
-              style={textareaStyle}
-              placeholder={`Portal  :  http://procdnnet.eu:80/c\nMAC Addr:  00:1A:79:7D:68:44\nExp date:  August 12, 2026, 12:00 am\nChannels:  3960\n\nPortal  :  http://procdnnet.eu:80/c\nMAC Addr:  00:1A:79:0D:A1:97\n...`}
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-            />
-
-            <div style={{ display: 'flex', gap: '12px', marginTop: '20px', justifyContent: 'flex-end' }}>
-              <button className="btn-secondary" style={{ padding: '10px 20px' }} onClick={() => setShowBulkModal(false)}>
-                Cancel
-              </button>
-              <button className="btn-primary" style={{ padding: '10px 24px' }} onClick={handleBulkImport}>
-                Import Profiles
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

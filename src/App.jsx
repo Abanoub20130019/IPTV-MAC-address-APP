@@ -1,23 +1,68 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate, Navigate } from 'react-router-dom';
 import ConnectionScreen from './components/ConnectionScreen';
 import LiveTVTab from './components/LiveTVTab';
 import MoviesTab from './components/MoviesTab';
 import SeriesTab from './components/SeriesTab';
+import LoginScreen from './components/LoginScreen';
+import AdminDashboard from './components/AdminDashboard';
+import GlobalSearch from './components/GlobalSearch';
 
 export default function App() {
   const [connection, setConnection] = useState(null); // stores { portalUrl, mac, token, isMock, profile }
   const [activeTab, setActiveTab] = useState('live'); // live, movies, series, settings
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [globalPlayItem, setGlobalPlayItem] = useState(null); // { type: 'vod'|'series'|'live', item: object }
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('helix_iptv_token');
+    if (token) {
+      fetch('/api/auth/verify', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.user) {
+          setUser(data.user);
+        } else {
+          localStorage.removeItem('helix_iptv_token');
+        }
+      })
+      .catch(() => localStorage.removeItem('helix_iptv_token'))
+      .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('helix_iptv_token');
+    setUser(null);
+    setConnection(null);
+    navigate('/login');
+  };
 
   const handleDisconnect = () => {
     setConnection(null);
     setActiveTab('live');
   };
 
-  if (!connection) {
-    return <ConnectionScreen onConnectSuccess={setConnection} />;
-  }
+  if (loading) return <div className="spinner" style={{ margin: 'auto', display: 'block', position: 'absolute', top: '50%', left: '50%' }}/>;
 
   return (
+    <Routes>
+      <Route path="/login" element={!user ? <LoginScreen onLoginSuccess={setUser} /> : <Navigate to="/" />} />
+      <Route path="/admin" element={user?.role === 'admin' ? <AdminDashboard onLogout={handleLogout} /> : <Navigate to="/" />} />
+      <Route path="/" element={
+        !user ? <Navigate to="/login" /> :
+        !connection ? (
+          <div style={{ position: 'relative' }}>
+            <button className="btn-secondary" onClick={handleLogout} style={{ position: 'absolute', top: 20, right: 20, zIndex: 100 }}>Logout</button>
+            <ConnectionScreen onConnectSuccess={setConnection} />
+          </div>
+        ) : (
     <div className="app-grid">
       {/* 1. Left Navigation Bar */}
       <nav className="glass-panel" style={navStyle}>
@@ -95,11 +140,23 @@ export default function App() {
       </nav>
 
       {/* 2. Main Tab View Area */}
-      <main className="app-content">
-        {activeTab === 'live' && <LiveTVTab connection={connection} />}
-        {activeTab === 'movies' && <MoviesTab connection={connection} />}
-        {activeTab === 'series' && <SeriesTab connection={connection} />}
-        {activeTab === 'settings' && (
+      <main className="app-content" style={{ display: 'flex', flexDirection: 'column' }}>
+        
+        {/* Top Header Bar for Global Search */}
+        <div style={{ padding: '15px 30px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', borderBottom: '1px solid var(--border-glass)' }}>
+          <GlobalSearch 
+            connection={connection}
+            onPlayChannel={(c) => { setActiveTab('live'); setGlobalPlayItem({ type: 'live', item: c }); }}
+            onPlayMovie={(m) => { setActiveTab('movies'); setGlobalPlayItem({ type: 'vod', item: m }); }}
+            onPlaySeries={(s) => { setActiveTab('series'); setGlobalPlayItem({ type: 'series', item: s }); }}
+          />
+        </div>
+
+        <div style={{ flex: 1, padding: '20px', overflow: 'hidden' }}>
+          {activeTab === 'live' && <LiveTVTab connection={connection} globalPlayItem={globalPlayItem} clearGlobalPlayItem={() => setGlobalPlayItem(null)} />}
+          {activeTab === 'movies' && <MoviesTab connection={connection} globalPlayItem={globalPlayItem} clearGlobalPlayItem={() => setGlobalPlayItem(null)} />}
+          {activeTab === 'series' && <SeriesTab connection={connection} globalPlayItem={globalPlayItem} clearGlobalPlayItem={() => setGlobalPlayItem(null)} />}
+          {activeTab === 'settings' && (
           <div style={settingsContainerStyle}>
             <div className="glass-panel" style={settingsCardStyle}>
               <h2 style={settingsTitleStyle}>Portal Connection Profile</h2>
@@ -140,9 +197,13 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
+          )}
+        </div>
       </main>
     </div>
+        )
+      } />
+    </Routes>
   );
 }
 

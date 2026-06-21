@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import VideoPlayer from './VideoPlayer';
 
-export default function LiveTVTab({ connection }) {
+export default function LiveTVTab({ connection, globalPlayItem, clearGlobalPlayItem }) {
   const [genres, setGenres] = useState([]);
   const [channels, setChannels] = useState([]);
   const [selectedGenre, setSelectedGenre] = useState('all');
@@ -9,6 +9,18 @@ export default function LiveTVTab({ connection }) {
   const [genreSearchQuery, setGenreSearchQuery] = useState('');
   const [activeChannel, setActiveChannel] = useState(null);
   const [resolvedStreamUrl, setResolvedStreamUrl] = useState('');
+  
+  // EPG state
+  const [epgData, setEpgData] = useState([]);
+  const [loadingEpg, setLoadingEpg] = useState(false);
+
+  // Handle global play item
+  useEffect(() => {
+    if (globalPlayItem && globalPlayItem.type === 'live' && globalPlayItem.item) {
+      playChannel(globalPlayItem.item);
+      clearGlobalPlayItem();
+    }
+  }, [globalPlayItem]);
   
   // Favorites state
   const [favorites, setFavorites] = useState([]);
@@ -210,6 +222,31 @@ export default function LiveTVTab({ connection }) {
     }
   };
 
+  // Fetch EPG when active channel changes
+  useEffect(() => {
+    if (!activeChannel) return;
+
+    async function fetchEpg() {
+      setLoadingEpg(true);
+      setEpgData([]);
+      try {
+        const res = await fetch(`/api/channels/epg?mac=${encodeURIComponent(connection.mac)}&channelId=${encodeURIComponent(activeChannel.id)}`);
+        const data = await res.json();
+        
+        const epgItems = data.js?.data || data.js || [];
+        if (Array.isArray(epgItems)) {
+          setEpgData(epgItems);
+        }
+      } catch (err) {
+        console.error('Failed to fetch EPG:', err);
+      } finally {
+        setLoadingEpg(false);
+      }
+    }
+
+    fetchEpg();
+  }, [connection, activeChannel]);
+
   // Filter genres by search query
   const filteredGenres = genres.filter(g => 
     g.title?.toLowerCase().includes(genreSearchQuery.toLowerCase()) || g.id === 'all' || g.id === 'favorites'
@@ -385,6 +422,9 @@ export default function LiveTVTab({ connection }) {
                   token={connection.token}
                   portalUrl={connection.portalUrl}
                   isLive={true}
+                  channelsList={filteredChannels}
+                  activeChannelId={activeChannel.id}
+                  onChannelSelect={playChannel}
                 />
               ) : (
                 <div style={playerLoadingStyle} className="glass-panel">
@@ -414,10 +454,50 @@ export default function LiveTVTab({ connection }) {
               </div>
 
               <div style={epgContentStyle}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>ELECTRONIC PROGRAM GUIDE (EPG)</span>
-                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  No program guide information available for this channel.
-                </p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>ELECTRONIC PROGRAM GUIDE (EPG)</span>
+                </div>
+                
+                {loadingEpg ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div className="spinner" style={{ width: '20px', height: '20px' }} />
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Loading EPG...</span>
+                  </div>
+                ) : epgData.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto', paddingRight: '10px' }} className="hide-scrollbar">
+                    {epgData.map((prog, idx) => {
+                      const isNowPlaying = prog.mark_memo === 1 || prog.now_playing === 1 || prog.status === 1 || idx === 0; // Simple fallback for now playing
+                      return (
+                        <div key={idx} style={{ 
+                          display: 'flex', 
+                          gap: '15px', 
+                          padding: '10px 15px', 
+                          background: isNowPlaying ? 'rgba(0, 240, 255, 0.05)' : 'rgba(255, 255, 255, 0.02)', 
+                          borderRadius: '8px',
+                          borderLeft: isNowPlaying ? '3px solid var(--accent-primary)' : '3px solid transparent'
+                        }}>
+                          <div style={{ minWidth: '80px', color: isNowPlaying ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: '0.85rem', fontWeight: isNowPlaying ? 'bold' : 'normal' }}>
+                            {prog.t_time || prog.time}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '0.9rem', color: isNowPlaying ? '#fff' : 'var(--text-primary)', fontWeight: isNowPlaying ? 'bold' : 'normal' }}>
+                              {prog.name}
+                            </div>
+                            {prog.descr && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                {prog.descr}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    No program guide information available for this channel.
+                  </p>
+                )}
               </div>
             </div>
           </div>

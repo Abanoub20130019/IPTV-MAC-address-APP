@@ -1,6 +1,10 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
+import { createClient } from '@supabase/supabase-js';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 // Intercept axios.get to add automatic retries for stalker portal robustness
 const originalGet = axios.get;
@@ -30,6 +34,57 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+// Request Logger
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  const originalSend = res.send;
+  res.send = function (data) {
+    if (res.statusCode >= 400) {
+      console.log(`[RESPONSE ERROR] ${res.statusCode} for ${req.method} ${req.url}`);
+    }
+    originalSend.call(this, data);
+  };
+  next();
+});
+
+
+// -------------------------------------------------------------
+// DATABASE SETUP (Supabase)
+// -------------------------------------------------------------
+const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_iptv_key';
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SECRET_KEY; // Using service role key for backend access
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing Supabase Environment Variables! Please set SUPABASE_URL and SUPABASE_SECRET_KEY.');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+console.log('Connected to Supabase Database');
+
+// Auto-create default admin if no users exist
+async function initSupabase() {
+  try {
+    const { data, error } = await supabase.from('users').select('id').limit(1);
+    if (!error && (!data || data.length === 0)) {
+      const hash = bcrypt.hashSync('admin', 10);
+      const { error: insertErr } = await supabase.from('users').insert([{
+        username: 'admin',
+        password: hash,
+        role: 'admin'
+      }]);
+      if (!insertErr) {
+        console.log('Created default admin user: admin / admin');
+      }
+    }
+  } catch (err) {
+    console.error('Supabase init error:', err);
+  }
+}
+initSupabase();
 
 // In-memory store for session tokens, cookies, and resolved load.php paths
 const sessionStore = new Map();
@@ -171,7 +226,210 @@ function cleanStalkerId(id) {
 }
 
 // -------------------------------------------------------------
-// API ENDPOINTS
+// AUTH & ADMIN API ENDPOINTS (Supabase)
+// -------------------------------------------------------------
+
+// Middleware for JWT
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+const requireAdmin = (req, res, next) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  next();
+};
+
+// Login Route
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+  const { data: users, error } = await supabase.from('users').select('*').eq('username', username).limit(1);
+  
+  if (error || !users || users.length === 0) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  const user = users[0];
+  if (bcrypt.compareSync(password, user.password)) {
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
+
+// Verify Token & Get Profiles
+app.get('/api/auth/verify', authenticateToken, async (req, res) => {
+  // We use * or explicitly list channels and expiry_date if they exist
+  // Using * is safer in case columns are missing or added later
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('user_id', req.user.id);
+    
+  if (error) {
+    // Fallback to minimal select if * causes issues (unlikely)
+    return res.status(500).json({ error: 'DB Error' });
+  }
+  res.json({ user: req.user, profiles: profiles || [] });
+});
+
+// User add their own profile
+app.post('/api/auth/profiles', authenticateToken, async (req, res) => {
+  const { profile_name, mac, portal_url, channels, expiry_date } = req.body;
+  if (!profile_name || !mac || !portal_url) return res.status(400).json({ error: 'Missing fields' });
+  
+  // Check for duplicate MAC for this user
+  const { data: existing } = await supabase.from('profiles')
+    .select('id')
+    .eq('user_id', req.user.id)
+    .eq('mac', mac);
+    
+  if (existing && existing.length > 0) {
+    // If it exists, optionally update it, but for now we skip duplicate creation
+    return res.json({ id: existing[0].id, skipped: true, message: 'MAC already exists' });
+  }
+
+  // Insert new profile (channels and expiry_date will be ignored by Supabase if columns don't exist yet, wait actually Supabase will throw an error if we pass undefined columns)
+  // To be safe, only pass columns that exist. If the user adds them later, we can pass them.
+  const insertData = {
+    user_id: req.user.id,
+    profile_name,
+    mac,
+    portal_url
+  };
+  
+  // Only add these if the user provides them and we want to try saving them
+  if (channels) insertData.channels = channels;
+  if (expiry_date) insertData.expiry_date = expiry_date;
+
+  const { data, error } = await supabase.from('profiles').insert([insertData]).select().single();
+
+  if (error) {
+    // If error is about missing columns, fallback to basic insert
+    if (error.code === 'PGRST204' || error.message.includes('column')) {
+      const basicData = { user_id: req.user.id, profile_name, mac, portal_url };
+      const fallback = await supabase.from('profiles').insert([basicData]).select().single();
+      if (fallback.error) return res.status(500).json({ error: fallback.error.message });
+      return res.json({ id: fallback.data.id, profile_name, mac, portal_url });
+    }
+    return res.status(500).json({ error: error.message });
+  }
+  
+  res.json({ id: data.id, profile_name, mac, portal_url });
+});
+
+// User delete their own profile
+app.delete('/api/auth/profiles/:id', authenticateToken, async (req, res) => {
+  const { error } = await supabase
+    .from('profiles')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('user_id', req.user.id);
+    
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json({ success: true });
+});
+
+// ------------------- ADMIN ROUTES -------------------
+
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { data: users, error } = await supabase.from('users').select('id, username, role, created_at');
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json(users);
+});
+
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { username, password, role } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  
+  const hash = bcrypt.hashSync(password, 10);
+  const { data, error } = await supabase.from('users').insert([{
+    username,
+    password: hash,
+    role: role || 'user'
+  }]).select().single();
+
+  if (error) {
+    return res.status(400).json({ error: error.code === '23505' ? 'Username taken' : 'DB Error' });
+  }
+  
+  res.json({ id: data.id, username, role: role || 'user' });
+});
+
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  if (parseInt(req.params.id) === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
+  
+  const { error } = await supabase.from('users').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json({ success: true });
+});
+
+app.get('/api/admin/profiles', authenticateToken, requireAdmin, async (req, res) => {
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select(`
+      id,
+      profile_name,
+      mac,
+      portal_url,
+      user_id,
+      users:user_id (username)
+    `);
+
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  
+  // Format to match the previous structure
+  const formattedProfiles = profiles.map(p => ({
+    id: p.id,
+    profile_name: p.profile_name,
+    mac: p.mac,
+    portal_url: p.portal_url,
+    user_id: p.user_id,
+    user_name: p.users?.username
+  }));
+  
+  res.json(formattedProfiles);
+});
+
+app.post('/api/admin/profiles', authenticateToken, requireAdmin, async (req, res) => {
+  const { user_id, profile_name, mac, portal_url } = req.body;
+  
+  const { data, error } = await supabase.from('profiles').insert([{
+    user_id,
+    profile_name,
+    mac,
+    portal_url
+  }]).select().single();
+
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json({ id: data.id, user_id, profile_name, mac, portal_url });
+});
+
+app.delete('/api/admin/profiles/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('profiles').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json({ success: true });
+});
+
+app.delete('/api/admin/delete-all-profiles', authenticateToken, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('profiles').delete().neq('id', 0); // Delete all
+  if (error) return res.status(500).json({ error: 'DB Error' });
+  res.json({ success: true });
+});
+
+
+// -------------------------------------------------------------
+// STALKER API PROXY ENDPOINTS
 // -------------------------------------------------------------
 
 // Perform Handshake & Connect
@@ -342,7 +600,8 @@ app.get('/api/channels', async (req, res) => {
   try {
     // Stalker get_ordered_list endpoint
     const genreParam = genre && genre !== '0' ? `&genre=${genre}` : '';
-    const url = `${session.resolvedUrl}?type=itv&action=get_ordered_list${genreParam}&fav=0&sortby=number&p=${page}&JsHttpRequest=1-xml`;
+    const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
+    const url = `${session.resolvedUrl}?type=itv&action=get_ordered_list${genreParam}${searchParam}&fav=0&sortby=number&p=${page}&JsHttpRequest=1-xml`;
     
     const response = await axios.get(url, {
       headers: getMagHeaders(session.mac, session.token),
@@ -351,6 +610,26 @@ app.get('/api/channels', async (req, res) => {
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to load channels', details: err.message });
+  }
+});
+
+// Get EPG for a Channel
+app.get('/api/channels/epg', async (req, res) => {
+  const { mac, channelId } = req.query;
+  const session = sessionStore.get(mac);
+
+  if (!session) return res.status(401).json({ error: 'Session not found' });
+  if (session.isMock) return res.json({ js: [] }); // No mock EPG for now
+
+  try {
+    const url = `${session.resolvedUrl}?type=itv&action=get_short_epg&ch_id=${channelId}&limit=10&JsHttpRequest=1-xml`;
+    const response = await axios.get(url, {
+      headers: getMagHeaders(session.mac, session.token),
+      timeout: 5000
+    });
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load EPG', details: err.message });
   }
 });
 
@@ -394,7 +673,8 @@ app.get('/api/vod/movies', async (req, res) => {
 
   try {
     const catParam = category && category !== '0' ? `&category=${category}` : '';
-    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}&fav=0&p=${page}&JsHttpRequest=1-xml`;
+    const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
+    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&fav=0&p=${page}&JsHttpRequest=1-xml`;
     const response = await axios.get(url, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 10000
@@ -461,9 +741,10 @@ app.get('/api/series/list', async (req, res) => {
 
   try {
     const catParam = category && category !== '0' ? `&category=${category}` : '';
+    const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
 
     // Primary: type=series
-    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}&p=${page}&JsHttpRequest=1-xml`;
+    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}${searchParam}&p=${page}&JsHttpRequest=1-xml`;
     try {
       const response = await axios.get(seriesUrl, {
         headers: getMagHeaders(session.mac, session.token),
@@ -486,7 +767,7 @@ app.get('/api/series/list', async (req, res) => {
     }
 
     // Fallback: type=vod filtered by is_series
-    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}&movie_id=0&p=${page}&JsHttpRequest=1-xml`;
+    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&movie_id=0&p=${page}&JsHttpRequest=1-xml`;
     const response = await axios.get(vodUrl, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 10000
