@@ -58,6 +58,7 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SECRET_KEY; // Using service role key for backend access
 
 import WebSocket from 'ws';
+globalThis.WebSocket = WebSocket;
 
 if (!supabaseUrl || !supabaseKey) {
   console.error('Missing Supabase Environment Variables! Please set SUPABASE_URL and SUPABASE_SECRET_KEY.');
