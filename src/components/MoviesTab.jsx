@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
-import { searchTMDB, getTMDBDetails, getTMDBImageUrl } from '../utils/tmdb';
 import * as ReactWindow from 'react-window';
 const Grid = ReactWindow.FixedSizeGrid;
 import * as AutoSizerModule from 'react-virtualized-auto-sizer';
@@ -13,7 +12,6 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
   const [searchQuery, setSearchQuery] = useState('');
   const [catSearchQuery, setCatSearchQuery] = useState('');
   const [activeMovie, setActiveMovie] = useState(null);
-  const [tmdbData, setTmdbData] = useState(null);
   const [resolvedStreamUrl, setResolvedStreamUrl] = useState('');
 
   // Handle global play item
@@ -174,18 +172,6 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
   // Handle movie selection for details modal
   const handleSelectMovie = async (movie) => {
     setActiveMovie(movie);
-    setTmdbData(null);
-    
-    // Attempt TMDB Match
-    try {
-      const searchResult = await searchTMDB(movie.name, 'movie', movie.year !== 'N/A' ? movie.year : null);
-      if (searchResult && searchResult.id) {
-        const details = await getTMDBDetails(searchResult.id, 'movie');
-        setTmdbData(details);
-      }
-    } catch (err) {
-      console.error('TMDB Error:', err);
-    }
   };
 
   const handlePlayMovie = async (movie) => {
@@ -403,7 +389,7 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
             className="glass-panel" 
             style={{ 
               ...modalCardStyle, 
-              backgroundImage: tmdbData?.backdrop_path ? `linear-gradient(to right, rgba(5,5,8,1) 30%, rgba(5,5,8,0.4)), url(${getTMDBImageUrl(tmdbData.backdrop_path, 'original')})` : 'none',
+              backgroundImage: 'none',
               backgroundSize: 'cover',
               backgroundPosition: 'center'
             }}
@@ -417,14 +403,14 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
             <div style={modalContentGridStyle}>
               {/* Left Column: Image Poster */}
               <div style={modalMediaStyle}>
-                <img src={tmdbData?.poster_path ? getTMDBImageUrl(tmdbData.poster_path) : activeMovie.screenshot_uri} alt={activeMovie.name} style={modalPosterStyle} />
+                <img src={activeMovie.screenshot_uri} alt={activeMovie.name} style={modalPosterStyle} />
               </div>
 
               {/* Right Column: Info */}
               <div style={modalDetailsStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                   <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.8rem', color: 'var(--text-primary)', margin: 0 }}>
-                    {tmdbData?.title || activeMovie.name}
+                    {activeMovie.name}
                   </h2>
                   <button
                     onClick={() => toggleFavorite(activeMovie.id)}
@@ -446,43 +432,13 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
                 
                 <div style={metaContainerStyle}>
                   <span style={{...metaItemStyle, color: '#f5c518', fontWeight: 'bold'}}>
-                    ★ {tmdbData ? tmdbData.vote_average?.toFixed(1) : activeMovie.rating}
+                    ★ {activeMovie.rating}
                   </span>
-                  <span style={metaItemStyle}>{tmdbData ? tmdbData.release_date?.substring(0,4) : activeMovie.year}</span>
-                  {tmdbData?.runtime > 0 && <span style={metaItemStyle}>{tmdbData.runtime} min</span>}
+                  <span style={metaItemStyle}>{activeMovie.year}</span>
                   <span style={metaItemStyle}>Dir: {activeMovie.director}</span>
                 </div>
 
-                <p style={descriptionStyle}>{tmdbData?.overview || activeMovie.description}</p>
-
-                {tmdbData?.genres && (
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '15px' }}>
-                    {tmdbData.genres.map(g => (
-                      <span key={g.id} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: '12px' }}>{g.name}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Cast */}
-                {tmdbData?.credits?.cast && tmdbData.credits.cast.length > 0 && (
-                  <div style={{ marginBottom: '20px' }}>
-                    <strong style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Top Cast</strong>
-                    <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px' }}>
-                      {tmdbData.credits.cast.slice(0, 5).map(actor => (
-                        <div key={actor.id} style={{ textAlign: 'center', minWidth: '70px' }}>
-                          <div style={{ width: '50px', height: '50px', borderRadius: '25px', overflow: 'hidden', margin: '0 auto 5px', background: 'rgba(255,255,255,0.1)' }}>
-                            {actor.profile_path ? (
-                              <img src={getTMDBImageUrl(actor.profile_path, 'w200')} alt={actor.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : (
-                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>N/A</div>
-                            )}
-                          </div>
-                          <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{actor.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <p style={descriptionStyle}>{activeMovie.description}</p>
 
                 <div style={{ display: 'flex', gap: '15px', marginTop: '20px' }}>
                   <button 
@@ -492,40 +448,7 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
                   >
                     <span style={{ fontSize: '1.1rem' }}>▶</span> WATCH NOW
                   </button>
-                  
-                  {tmdbData?.videos?.results?.find(v => v.type === 'Trailer' && v.site === 'YouTube') && (
-                    <a 
-                      href={`https://www.youtube.com/watch?v=${tmdbData.videos.results.find(v => v.type === 'Trailer').key}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-secondary"
-                      style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', textDecoration: 'none' }}
-                    >
-                      Trailer
-                    </a>
-                  )}
                 </div>
-
-                {/* More Like This */}
-                {tmdbData?.recommendations?.results && tmdbData.recommendations.results.length > 0 && (
-                  <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
-                    <strong style={{ display: 'block', marginBottom: '10px', fontSize: '0.95rem', color: 'var(--text-primary)' }}>More Like This</strong>
-                    <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '10px' }}>
-                      {tmdbData.recommendations.results.slice(0, 10).map(rec => (
-                        <div key={rec.id} style={{ minWidth: '100px', cursor: 'pointer' }}>
-                          <img 
-                            src={rec.poster_path ? getTMDBImageUrl(rec.poster_path, 'w200') : 'https://via.placeholder.com/100x150?text=No+Poster'} 
-                            alt={rec.title} 
-                            style={{ width: '100px', height: '150px', borderRadius: '8px', objectFit: 'cover', marginBottom: '5px' }} 
-                          />
-                          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {rec.title}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
               </div>
             </div>

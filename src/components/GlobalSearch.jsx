@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getTMDBImageUrl } from '../utils/tmdb';
 
 export default function GlobalSearch({ connection, onPlayChannel, onPlayMovie, onPlaySeries }) {
   const [query, setQuery] = useState('');

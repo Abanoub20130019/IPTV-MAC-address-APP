@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
-import { searchTMDB, getTMDBDetails, getTMDBImageUrl } from '../utils/tmdb';
 import * as ReactWindow from 'react-window';
 const Grid = ReactWindow.FixedSizeGrid;
 import * as AutoSizerModule from 'react-virtualized-auto-sizer';
@@ -34,7 +33,6 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
   
   // Selected Series, Seasons & Episodes state
   const [activeSeries, setActiveSeries] = useState(null);
-  const [tmdbData, setTmdbData] = useState(null);
   const [seasonsList, setSeasonsList] = useState([]);
   const [selectedSeason, setSelectedSeason] = useState(null);
   const [episodes, setEpisodes] = useState([]);
@@ -190,20 +188,9 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
     };
   }, [connection, selectedCategory, page]);
 
-  // Handle Series Selection & TMDB Fetch
+  // Handle Series Selection
   const handleSelectSeries = async (series) => {
     setActiveSeries(series);
-    setTmdbData(null);
-    
-    try {
-      const searchResult = await searchTMDB(series.name, 'tv');
-      if (searchResult && searchResult.id) {
-        const details = await getTMDBDetails(searchResult.id, 'tv');
-        setTmdbData(details);
-      }
-    } catch (err) {
-      console.error('TMDB Error:', err);
-    }
   };
 
   // Fetch Seasons when Active Series is selected
@@ -551,7 +538,7 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
             className="glass-panel" 
             style={{ 
               ...modalCardStyle,
-              backgroundImage: tmdbData?.backdrop_path ? `linear-gradient(to right, rgba(5,5,8,1) 30%, rgba(5,5,8,0.4)), url(${getTMDBImageUrl(tmdbData.backdrop_path, 'original')})` : 'none',
+              backgroundImage: 'none',
               backgroundSize: 'cover',
               backgroundPosition: 'center'
             }}
@@ -566,14 +553,14 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
             <div style={modalContentGridStyle}>
               {/* Left Column: Image Poster */}
               <div style={modalMediaStyle}>
-                <img src={tmdbData?.poster_path ? getTMDBImageUrl(tmdbData.poster_path) : activeSeries.screenshot_uri} alt={activeSeries.name} style={modalPosterStyle} />
+                <img src={activeSeries.screenshot_uri} alt={activeSeries.name} style={modalPosterStyle} />
               </div>
 
               {/* Right Column: Info & Seasons / Episodes list */}
               <div style={infoColStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                   <h2 style={{ fontFamily: 'var(--font-title)', fontSize: '1.6rem', color: 'var(--text-primary)', margin: 0 }}>
-                    {tmdbData?.name || activeSeries.name}
+                    {activeSeries.name}
                   </h2>
                   <button
                     onClick={() => toggleFavorite(activeSeries.id)}
@@ -595,42 +582,13 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
 
                 <div style={{ display: 'flex', gap: '15px', marginTop: '10px', fontSize: '0.85rem' }}>
                   <span style={{ color: '#f5c518', fontWeight: 'bold' }}>
-                    ★ {tmdbData ? tmdbData.vote_average?.toFixed(1) : ''}
+                    ★ {activeSeries.rating || 'N/A'}
                   </span>
-                  <span style={{ color: 'var(--text-muted)' }}>{tmdbData ? tmdbData.first_air_date?.substring(0,4) : ''}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{tmdbData?.number_of_seasons ? `${tmdbData.number_of_seasons} Seasons` : ''}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{activeSeries.year !== 'N/A' ? activeSeries.year : ''}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Dir: {activeSeries.director || 'N/A'}</span>
                 </div>
 
-                <p style={{ ...descriptionStyle, marginTop: '10px' }}>{tmdbData?.overview || activeSeries.description}</p>
-
-                {tmdbData?.genres && (
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '15px' }}>
-                    {tmdbData.genres.map(g => (
-                      <span key={g.id} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}>{g.name}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Cast */}
-                {tmdbData?.credits?.cast && tmdbData.credits.cast.length > 0 && (
-                  <div style={{ marginBottom: '20px' }}>
-                    <strong style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Top Cast</strong>
-                    <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '5px' }}>
-                      {tmdbData.credits.cast.slice(0, 5).map(actor => (
-                        <div key={actor.id} style={{ textAlign: 'center', minWidth: '70px' }}>
-                          <div style={{ width: '50px', height: '50px', borderRadius: '25px', overflow: 'hidden', margin: '0 auto 5px', background: 'rgba(255,255,255,0.1)' }}>
-                            {actor.profile_path ? (
-                              <img src={getTMDBImageUrl(actor.profile_path, 'w200')} alt={actor.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : (
-                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>N/A</div>
-                            )}
-                          </div>
-                          <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{actor.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <p style={{ ...descriptionStyle, marginTop: '10px' }}>{activeSeries.description}</p>
 
                 {/* Season Tabs Selector */}
                 {seasonsList.length > 0 && (
@@ -709,26 +667,7 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
                   </div>
                 )}
 
-                {/* More Like This */}
-                {tmdbData?.recommendations?.results && tmdbData.recommendations.results.length > 0 && (
-                  <div style={{ marginTop: '30px' }}>
-                    <h4 style={subTitleStyle}>More Like This</h4>
-                    <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '10px' }} className="hide-scrollbar">
-                      {tmdbData.recommendations.results.slice(0, 10).map(rec => (
-                        <div key={rec.id} style={{ minWidth: '100px', cursor: 'pointer', flexShrink: 0 }}>
-                          <img 
-                            src={rec.poster_path ? getTMDBImageUrl(rec.poster_path, 'w200') : 'https://via.placeholder.com/100x150?text=No+Poster'} 
-                            alt={rec.name} 
-                            style={{ width: '100px', height: '150px', borderRadius: '8px', objectFit: 'cover', marginBottom: '5px' }} 
-                          />
-                          <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {rec.name}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+
               </div>
             </div>
           </div>
