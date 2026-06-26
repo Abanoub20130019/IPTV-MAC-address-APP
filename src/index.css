@@ -360,4 +360,35 @@ input, select, button {
     font-size: 0.75rem !important;
     margin-top: 4px !important;
   }
+
+  /* Video Player Mobile Overrides */
+  .vp-controls-bar {
+    flex-wrap: wrap !important;
+    gap: 10px !important;
+  }
+
+  .vp-left-controls {
+    flex-wrap: wrap !important;
+    width: 100% !important;
+    justify-content: flex-start !important;
+  }
+
+  .vp-right-controls {
+    width: 100% !important;
+    justify-content: flex-end !important;
+    margin-top: 5px !important;
+  }
+
+  .vp-volume-slider {
+    display: none !important;
+  }
+
+  .vp-stream-title {
+    font-size: 0.8rem !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100px !important;
+  }
 }
+

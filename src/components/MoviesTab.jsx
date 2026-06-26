@@ -114,7 +114,9 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
         
         const normalized = items.map(m => {
           const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
-          const imgUrl = m.screenshot_uri || m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=400&h=600&fit=crop';
+          let imgUrl = m.screenshot_uri || m.poster || '';
+          if (typeof imgUrl !== 'string') imgUrl = '';
+          imgUrl = imgUrl.trim() || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=400&h=600&fit=crop';
           const resolvedImg = imgUrl.startsWith('http') ? imgUrl : `${portalBase}/${imgUrl.replace(/^\//, '')}`;
           
           return {

@@ -139,7 +139,9 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
         const items = Array.isArray(rawList) ? rawList : [];
         const normalized = items.map(s => {
           const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
-          const imgUrl = s.cover || s.screenshot_uri || 'https://images.unsplash.com/photo-1593118247619-e2d6f056869e?w=400&h=600&fit=crop';
+          let imgUrl = s.cover || s.screenshot_uri || '';
+          if (typeof imgUrl !== 'string') imgUrl = '';
+          imgUrl = imgUrl.trim() || 'https://images.unsplash.com/photo-1593118247619-e2d6f056869e?w=400&h=600&fit=crop';
           const resolvedImg = imgUrl.startsWith('http') ? imgUrl : `${portalBase}/${imgUrl.replace(/^\//, '')}`;
           return {
             id: s.id,
@@ -242,14 +244,23 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
         const rawEps = data.js?.data || data.js || [];
         const items = Array.isArray(rawEps) ? rawEps : [];
 
-        const normalized = items.map(ep => ({
-          id: ep.id,
-          name: ep.name || ep.title || `Episode ${ep.series_number || ep.series_num || ''}`,
-          episodeNumber: ep.series_number || ep.episode_number || ep.series_num || ep.episode_num || '0',
-          cmd: (ep.cmd || ep.link || '').replace(/^(ffmpeg|ffrt|direc|mpv|auto)\s+/, '').trim(),
-          description: ep.description || ep.plot || 'No episode plot available.',
-          screenshot_uri: ep.screenshot_uri || ep.poster || ''
-        }));
+        const normalized = items.map(ep => {
+          let epCmd = ep.cmd || ep.link || '';
+          if (typeof epCmd !== 'string') epCmd = '';
+          epCmd = epCmd.replace(/^(ffmpeg|ffrt|direc|mpv|auto)\s+/, '').trim();
+          
+          let epImg = ep.screenshot_uri || ep.poster || '';
+          if (typeof epImg !== 'string') epImg = '';
+
+          return {
+            id: ep.id,
+            name: ep.name || ep.title || `Episode ${ep.series_number || ep.series_num || ''}`,
+            episodeNumber: ep.series_number || ep.episode_number || ep.series_num || ep.episode_num || '0',
+            cmd: epCmd,
+            description: ep.description || ep.plot || 'No episode plot available.',
+            screenshot_uri: epImg
+          };
+        });
 
         // Sort episodes numerically by episode number
         normalized.sort((a, b) => parseInt(a.episodeNumber) - parseInt(b.episodeNumber));
