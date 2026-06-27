@@ -685,7 +685,7 @@ app.get('/api/vod/movies', async (req, res) => {
   try {
     const catParam = (category && category !== '0' && category !== 'all') ? `&category=${category}` : '';
     const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
-    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&fav=0&p=${page}&JsHttpRequest=1-xml`;
+    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&sortby=added&p=${page}&JsHttpRequest=1-xml`;
     const response = await axios.get(url, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 10000
@@ -755,7 +755,7 @@ app.get('/api/series/list', async (req, res) => {
     const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
 
     // Primary: type=series
-    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}${searchParam}&p=${page}&JsHttpRequest=1-xml`;
+    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}${searchParam}&sortby=added&p=${page}&JsHttpRequest=1-xml`;
     try {
       const response = await axios.get(seriesUrl, {
         headers: getMagHeaders(session.mac, session.token),
@@ -778,7 +778,7 @@ app.get('/api/series/list', async (req, res) => {
     }
 
     // Fallback: type=vod filtered by is_series
-    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&movie_id=0&p=${page}&JsHttpRequest=1-xml`;
+    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&movie_id=0&sortby=added&p=${page}&JsHttpRequest=1-xml`;
     const response = await axios.get(vodUrl, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 10000

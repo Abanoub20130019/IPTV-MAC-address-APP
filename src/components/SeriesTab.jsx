@@ -346,7 +346,7 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
     if (selectedCategory === 'favorites' && !favorites.includes(s.id)) {
       return false;
     }
-    return s.name?.toLowerCase().includes(searchQuery.toLowerCase());
+    return String(s.name || '').toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   return (

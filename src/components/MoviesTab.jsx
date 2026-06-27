@@ -223,7 +223,7 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
     if (selectedCategory === 'favorites' && !favorites.includes(m.id)) {
       return false;
     }
-    return m.name?.toLowerCase().includes(searchQuery.toLowerCase());
+    return String(m.name || '').toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   return (
