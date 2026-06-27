@@ -685,18 +685,15 @@ app.get('/api/vod/movies', async (req, res) => {
   try {
     const catParam = (category && category !== '0' && category !== 'all') ? `&category=${category}` : '';
     const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
-    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&sortby=added&p=${page}&limit=14&JsHttpRequest=1-xml`;
+    const url = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&fav=0&p=${page}&JsHttpRequest=1-xml`;
+    console.log('[VOD Movies] Fetching URL:', url);
     const response = await axios.get(url, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 30000
     });
-    let data = response.data;
-    if (data?.js?.data && Array.isArray(data.js.data) && data.js.data.length > 50) {
-      const pageNum = parseInt(page, 10) || 1;
-      const pageSize = 50;
-      data.js.data = data.js.data.slice((pageNum - 1) * pageSize, pageNum * pageSize);
-    }
-    
+    const data = response.data;
+    const items = data?.js?.data;
+    console.log('[VOD Movies] Response: total_items=', data?.js?.total_items, 'data_length=', Array.isArray(items) ? items.length : typeof items);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to load movies', details: err.message });
@@ -768,7 +765,8 @@ app.get('/api/series/list', async (req, res) => {
     const searchParam = req.query.search ? `&search=${encodeURIComponent(req.query.search)}` : '';
 
     // Primary: type=series
-    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}${searchParam}&sortby=added&p=${page}&limit=14&JsHttpRequest=1-xml`;
+    const seriesUrl = `${session.resolvedUrl}?type=series&action=get_ordered_list${catParam}${searchParam}&p=${page}&JsHttpRequest=1-xml`;
+    console.log('[Series] Fetching URL:', seriesUrl);
     try {
       const response = await axios.get(seriesUrl, {
         headers: getMagHeaders(session.mac, session.token),
@@ -791,7 +789,8 @@ app.get('/api/series/list', async (req, res) => {
     }
 
     // Fallback: type=vod filtered by is_series
-    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&movie_id=0&sortby=added&p=${page}&limit=14&JsHttpRequest=1-xml`;
+    const vodUrl = `${session.resolvedUrl}?type=vod&action=get_ordered_list${catParam}${searchParam}&movie_id=0&p=${page}&JsHttpRequest=1-xml`;
+    console.log('[Series Fallback] Fetching URL:', vodUrl);
     const response = await axios.get(vodUrl, {
       headers: getMagHeaders(session.mac, session.token),
       timeout: 30000

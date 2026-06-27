@@ -1,9 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
-import * as ReactWindow from 'react-window';
-const Grid = ReactWindow.FixedSizeGrid;
-import * as AutoSizerModule from 'react-virtualized-auto-sizer';
-const AutoSizer = AutoSizerModule.default || AutoSizerModule.AutoSizer || AutoSizerModule;
 
 export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayItem }) {
   const [categories, setCategories] = useState([]);
@@ -167,9 +163,20 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
     };
   }, [connection, selectedCategory, page]);
 
-  // Intersection observer for infinite scroll is replaced by Grid's onItemsRendered or custom scrolling,
-  // but to keep it simple with grid and existing sentinel logic, we can still use sentinel if AutoSizer allows.
-  // Actually, since Grid handles its own scroll, we should hook into Grid's onItemsRendered.
+  // IntersectionObserver for infinite scroll
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !isFetchingRef.current) {
+          setPage(prev => prev + 1);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, filteredMovies.length]);
 
   // Handle movie selection for details modal
   const handleSelectMovie = async (movie) => {
@@ -297,91 +304,53 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
               </p>
             </div>
           ) : (
-            <div style={{ flex: 1, width: '100%', height: '100%' }}>
-              <AutoSizer>
-                {({ height, width }) => {
-                  const COLUMN_WIDTH = 180 + 15; // card + gap
-                  const ROW_HEIGHT = 280 + 15;
-                  const columnCount = Math.max(1, Math.floor(width / COLUMN_WIDTH));
-                  const rowCount = Math.ceil(filteredMovies.length / columnCount) + (hasMore ? 1 : 0); // extra row for spinner
-                  
-                  return (
-                    <Grid
-                      columnCount={columnCount}
-                      columnWidth={COLUMN_WIDTH}
-                      height={height}
-                      rowCount={rowCount}
-                      rowHeight={ROW_HEIGHT}
-                      width={width}
-                      onItemsRendered={({ visibleRowStopIndex }) => {
-                        if (hasMore && !loadingMore && visibleRowStopIndex >= rowCount - 2) {
-                          setPage(prev => prev + 1);
-                        }
+            <div style={gridStyle} ref={scrollContainerRef}>
+              {filteredMovies.map(movie => {
+                const isFav = favorites.includes(movie.id);
+                return (
+                  <div 
+                    key={movie.id}
+                    className="glass-panel-interactive"
+                    style={{ ...movieCardStyle, position: 'relative' }}
+                    onClick={() => handleSelectMovie(movie)}
+                  >
+                    {/* Floating Star Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFavorite(movie.id);
                       }}
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        right: '6px',
+                        background: 'none',
+                        border: 'none',
+                        color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
+                        fontSize: '1.2rem',
+                        cursor: 'pointer',
+                        zIndex: 5,
+                        textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
+                        transition: 'color 0.2s'
+                      }}
+                      title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
                     >
-                      {({ columnIndex, rowIndex, style }) => {
-                        const index = rowIndex * columnCount + columnIndex;
-                        
-                        if (hasMore && rowIndex === rowCount - 1) {
-                          if (columnIndex === 0) {
-                            return (
-                              <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', width: width }}>
-                                <div className="spinner" style={{ width: '30px', height: '30px' }} />
-                              </div>
-                            );
-                          }
-                          return null;
-                        }
+                      ★
+                    </button>
 
-                        if (index >= filteredMovies.length) return null;
-                        
-                        const movie = filteredMovies[index];
-                        const isFav = favorites.includes(movie.id);
-
-                        return (
-                          <div style={{ ...style, padding: '7.5px' }}>
-                            <div 
-                              className="glass-panel-interactive"
-                              style={{ ...movieCardStyle, position: 'relative', width: '100%', height: '100%', margin: 0 }}
-                              onClick={() => handleSelectMovie(movie)}
-                            >
-                              {/* Floating Star Button */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleFavorite(movie.id);
-                                }}
-                                style={{
-                                  position: 'absolute',
-                                  top: '6px',
-                                  right: '6px',
-                                  background: 'none',
-                                  border: 'none',
-                                  color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
-                                  fontSize: '1.2rem',
-                                  cursor: 'pointer',
-                                  zIndex: 5,
-                                  textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
-                                  transition: 'color 0.2s'
-                                }}
-                                title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                              >
-                                ★
-                              </button>
-
-                              <img src={movie.screenshot_uri} alt={movie.name} style={posterStyle} />
-                              <div style={movieOverlayStyle}>
-                                <span style={yearTagStyle}>{movie.year}</span>
-                                <h4 style={movieTitleStyle}>{movie.name}</h4>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }}
-                    </Grid>
-                  );
-                }}
-              </AutoSizer>
+                    <img src={movie.screenshot_uri} alt={movie.name} style={posterStyle} />
+                    <div style={movieOverlayStyle}>
+                      <span style={yearTagStyle}>{movie.year}</span>
+                      <h4 style={movieTitleStyle}>{movie.name}</h4>
+                    </div>
+                  </div>
+                );
+              })}
+              {hasMore && (
+                <div ref={sentinelRef} style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'center', padding: '20px' }}>
+                  <div className="spinner" style={{ width: '30px', height: '30px' }} />
+                </div>
+              )}
             </div>
           )}
         </div>

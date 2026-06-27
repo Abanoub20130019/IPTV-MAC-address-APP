@@ -1,9 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import VideoPlayer from './VideoPlayer';
-import * as ReactWindow from 'react-window';
-const Grid = ReactWindow.FixedSizeGrid;
-import * as AutoSizerModule from 'react-virtualized-auto-sizer';
-const AutoSizer = AutoSizerModule.default || AutoSizerModule.AutoSizer || AutoSizerModule;
 
 export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayItem }) {
   const [categories, setCategories] = useState([]);
@@ -29,6 +25,7 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const scrollContainerRef = React.useRef(null);
+  const sentinelRef = React.useRef(null);
   const isFetchingRef = React.useRef(false);
   
   // Selected Series, Seasons & Episodes state
@@ -190,6 +187,21 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
       active = false;
     };
   }, [connection, selectedCategory, page]);
+
+  // IntersectionObserver for infinite scroll
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !isFetchingRef.current) {
+          setPage(prev => prev + 1);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, filteredSeries.length]);
 
   // Handle Series Selection
   const handleSelectSeries = async (series) => {
@@ -456,90 +468,52 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
                 </div>
               )}
 
-              <div style={{ flex: 1, width: '100%', height: '100%', minHeight: '500px' }}>
-                <AutoSizer>
-                  {({ height, width }) => {
-                    const COLUMN_WIDTH = 180 + 15; // card + gap
-                    const ROW_HEIGHT = 280 + 15;
-                    const columnCount = Math.max(1, Math.floor(width / COLUMN_WIDTH));
-                    const rowCount = Math.ceil(filteredSeries.length / columnCount) + (hasMore ? 1 : 0); // extra row for spinner
-                    
-                    return (
-                      <Grid
-                        columnCount={columnCount}
-                        columnWidth={COLUMN_WIDTH}
-                        height={height}
-                        rowCount={rowCount}
-                        rowHeight={ROW_HEIGHT}
-                        width={width}
-                        onItemsRendered={({ visibleRowStopIndex }) => {
-                          if (hasMore && !loadingMore && visibleRowStopIndex >= rowCount - 2) {
-                            setPage(prev => prev + 1);
-                          }
+              <div style={gridStyle}>
+                {filteredSeries.map(series => {
+                  const isFav = favorites.includes(series.id);
+                  return (
+                    <div 
+                      key={series.id}
+                      className="glass-panel-interactive"
+                      style={{ ...seriesCardStyle, position: 'relative' }}
+                      onClick={() => handleSelectSeries(series)}
+                    >
+                      {/* Floating Star Button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(series.id);
                         }}
+                        style={{
+                          position: 'absolute',
+                          top: '6px',
+                          right: '6px',
+                          background: 'none',
+                          border: 'none',
+                          color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
+                          fontSize: '1.2rem',
+                          cursor: 'pointer',
+                          zIndex: 5,
+                          textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
+                          transition: 'color 0.2s'
+                        }}
+                        title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
                       >
-                        {({ columnIndex, rowIndex, style }) => {
-                          const index = rowIndex * columnCount + columnIndex;
-                          
-                          if (hasMore && rowIndex === rowCount - 1) {
-                            if (columnIndex === 0) {
-                              return (
-                                <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', width: width }}>
-                                  <div className="spinner" style={{ width: '30px', height: '30px' }} />
-                                </div>
-                              );
-                            }
-                            return null;
-                          }
+                        ★
+                      </button>
 
-                          if (index >= filteredSeries.length) return null;
-                          
-                          const series = filteredSeries[index];
-                          const isFav = favorites.includes(series.id);
-
-                          return (
-                            <div style={{ ...style, padding: '7.5px' }}>
-                              <div 
-                                className="glass-panel-interactive"
-                                style={{ ...seriesCardStyle, position: 'relative', width: '100%', height: '100%', margin: 0 }}
-                                onClick={() => handleSelectSeries(series)}
-                              >
-                                {/* Floating Star Button */}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleFavorite(series.id);
-                                  }}
-                                  style={{
-                                    position: 'absolute',
-                                    top: '6px',
-                                    right: '6px',
-                                    background: 'none',
-                                    border: 'none',
-                                    color: isFav ? '#ffcc00' : 'rgba(255,255,255,0.3)',
-                                    fontSize: '1.2rem',
-                                    cursor: 'pointer',
-                                    zIndex: 5,
-                                    textShadow: isFav ? '0 0 8px rgba(255,204,0,0.6)' : 'none',
-                                    transition: 'color 0.2s'
-                                  }}
-                                  title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                                >
-                                  ★
-                                </button>
-
-                                <img src={series.screenshot_uri} alt={series.name} style={posterStyle} />
-                                <div style={movieOverlayStyle}>
-                                  <h4 style={seriesTitleStyle}>{series.name}</h4>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }}
-                      </Grid>
-                    );
-                  }}
-                </AutoSizer>
+                      <img src={series.screenshot_uri} alt={series.name} style={posterStyle} />
+                      <div style={movieOverlayStyle}>
+                        <h4 style={seriesTitleStyle}>{series.name}</h4>
+                      </div>
+                    </div>
+                  );
+                })}
+                {hasMore && (
+                  <div ref={sentinelRef} style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'center', padding: '20px' }}>
+                    <div className="spinner" style={{ width: '30px', height: '30px' }} />
+                  </div>
+                )}
               </div>
             </>
           )}
