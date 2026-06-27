@@ -71,7 +71,7 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
         setCategories([
           { id: 'all', title: 'All Movies' },
           { id: 'favorites', title: '★ Favorites' },
-          ...rawCats
+          ...(Array.isArray(rawCats) ? rawCats : [])
         ]);
       } catch (err) {
         console.error('Failed to load VOD categories:', err);
@@ -112,7 +112,7 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
         const rawMovies = data.js?.data || data.js || [];
         const items = Array.isArray(rawMovies) ? rawMovies : [];
         
-        const normalized = items.map(m => {
+        const normalized = items.filter(m => m && typeof m === 'object').map(m => {
           const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
           let imgUrl = m.screenshot_uri || m.poster || '';
           if (typeof imgUrl !== 'string') imgUrl = '';

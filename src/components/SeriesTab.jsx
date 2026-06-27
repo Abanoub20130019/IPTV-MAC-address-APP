@@ -97,7 +97,7 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
         setCategories([
           { id: 'all', title: 'All Series' },
           { id: 'favorites', title: '★ Favorites' },
-          ...rawCats
+          ...(Array.isArray(rawCats) ? rawCats : [])
         ]);
       } catch (err) {
         console.error('Failed to load series categories:', err);
@@ -135,9 +135,10 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
 
         if (!active) return;
 
-        const rawList = data.js?.data || data.js || [];
-        const items = Array.isArray(rawList) ? rawList : [];
-        const normalized = items.map(s => {
+        const rawSeries = data.js?.data || data.js || [];
+        const items = Array.isArray(rawSeries) ? rawSeries : [];
+        
+        const normalized = items.filter(s => s && typeof s === 'object').map(s => {
           const portalBase = (connection.portalUrl || '').replace(/\/c\/$/, '').replace(/\/$/, '');
           let imgUrl = s.cover || s.screenshot_uri || '';
           if (typeof imgUrl !== 'string') imgUrl = '';
