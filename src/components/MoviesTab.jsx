@@ -278,9 +278,12 @@ export default function MoviesTab({ connection, globalPlayItem, clearGlobalPlayI
           )}
         </div>
 
-        {/* Movies Grid */}
         <div style={contentStyle}>
-          {loadingMovies && page === 1 ? (
+          {error && page === 1 ? (
+            <div style={infoBoxStyle}>
+              <p style={{ color: '#ff4b4b', fontWeight: 'bold' }}>{error}</p>
+            </div>
+          ) : loadingMovies && page === 1 ? (
             <div style={loadingContainerStyle}>
               <div className="spinner" style={{ width: '40px', height: '40px' }} />
               <p style={{ marginTop: '12px', color: 'var(--text-secondary)' }}>Loading movies...</p>

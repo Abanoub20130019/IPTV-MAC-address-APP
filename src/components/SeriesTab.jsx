@@ -402,9 +402,12 @@ export default function SeriesTab({ connection, globalPlayItem, clearGlobalPlayI
           )}
         </div>
 
-        {/* Content list */}
-        <div style={contentStyle} ref={scrollContainerRef}>
-          {loadingSeries && page === 1 ? (
+        <div style={contentStyle}>
+          {error && page === 1 ? (
+            <div style={infoBoxStyle}>
+              <p style={{ color: '#ff4b4b', fontWeight: 'bold' }}>{error}</p>
+            </div>
+          ) : loadingSeries && page === 1 ? (
             <div style={loadingContainerStyle}>
               <div className="spinner" style={{ width: '40px', height: '40px' }} />
               <p style={{ marginTop: '12px', color: 'var(--text-secondary)' }}>Loading series...</p>
